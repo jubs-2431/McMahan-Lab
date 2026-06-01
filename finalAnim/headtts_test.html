@@ -148,7 +148,7 @@
       <button id="load">Load avatar + HeadTTS</button>
       <label>
         Test line
-        <textarea id="prompt">Give a short, natural one-sentence response.</textarea>
+        <textarea id="prompt">Say this naturally: I can look around, move a little, and speak with synchronized mouth shapes.</textarea>
       </label>
       <button id="speak" disabled>Ask server + speak with HeadTTS</button>
       <button id="direct" class="secondary" disabled>Speak typed text only</button>
@@ -179,6 +179,19 @@
         loadBtn.disabled = isBusy;
         speakBtn.disabled = isBusy || !ready;
         directBtn.disabled = isBusy || !ready;
+      }
+
+      function playNaturalGesture() {
+        if (!head) return;
+        try {
+          head.playGesture?.("salute", 2.2);
+        } catch (error) {
+          try {
+            head.speakEmoji?.("🙂");
+          } catch {
+            console.debug("TalkingHead gesture unavailable for this avatar.", error);
+          }
+        }
       }
 
       async function initHeadTTS() {
@@ -236,6 +249,9 @@
             body: selected?.dataset.body || "M",
             lipsyncLang: "en",
             avatarMood: "neutral",
+            avatarIdleEyeContact: 0.35,
+            avatarSpeakingEyeContact: 0.8,
+            avatarSpeakingHeadMove: 0.7,
           });
           setStatus("Avatar loaded. Loading HeadTTS...");
           await initHeadTTS();
@@ -252,6 +268,7 @@
       async function synthesize(text) {
         if (!tts || !head) return;
         await tts.setup({ voice: voiceSelect.value });
+        playNaturalGesture();
         await tts.synthesize({ input: text });
       }
 

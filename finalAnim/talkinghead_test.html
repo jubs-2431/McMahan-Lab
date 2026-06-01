@@ -135,7 +135,7 @@
       <button id="load">Load avatar</button>
       <label>
         Test line
-        <textarea id="prompt">This is a short test of the TalkingHead lip sync system.</textarea>
+        <textarea id="prompt">Say this naturally: I can look around, move a little, and speak with synchronized mouth shapes.</textarea>
       </label>
       <button id="speak" disabled>Ask server + speak</button>
       <div id="status">Ready.</div>
@@ -190,6 +190,19 @@
         };
       }
 
+      function playNaturalGesture() {
+        if (!head) return;
+        try {
+          head.playGesture?.("salute", 2.2);
+        } catch (error) {
+          try {
+            head.speakEmoji?.("🙂");
+          } catch {
+            console.debug("TalkingHead gesture unavailable for this avatar.", error);
+          }
+        }
+      }
+
       async function loadAvatar() {
         speakBtn.disabled = true;
         setStatus("Loading TalkingHead module/avatar...");
@@ -211,6 +224,9 @@
             body: selected?.dataset.body || "M",
             lipsyncLang: "en",
             avatarMood: "neutral",
+            avatarIdleEyeContact: 0.35,
+            avatarSpeakingEyeContact: 0.8,
+            avatarSpeakingHeadMove: 0.7,
           });
           speakBtn.disabled = false;
           setStatus(
@@ -240,6 +256,7 @@
           const audio = await head.audioCtx.decodeAudioData(base64ToArrayBuffer(data.audio_base64));
           const visemeData = cuesToVisemes(data.mouth_cues);
           setStatus(`Reply:\n${data.reply}\n\nPlaying with ${visemeData.visemes.length} Rhubarb-derived viseme cues.`);
+          playNaturalGesture();
           await head.speakAudio({
             audio,
             ...visemeData,
