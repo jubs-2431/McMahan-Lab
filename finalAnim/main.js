@@ -24,7 +24,8 @@ const LIP_SYNC_MESH_INCLUDE_PATTERN = /^(ccbasebody|ccbaseteeth|ccbasetongue)$/;
 const LIP_SYNC_EXCLUDE_PATTERN = /(blink|brow|tongue|eye|squint|cheek|nostril|smile|frown|close|press|pucker|purse|funnel|stretch|narrow|roll|tight|suck)/;
 const LIP_SYNC_OPEN_PATTERN = /(jawopen|mouthopen|openjaw|openmouth|vopen|vlipopen)/;
 const LIP_SYNC_VOWEL_PATTERN = /(visemeaa|visemeah|visemeao|visemeoh|visemeou|phonemeaa|phonemeah|phonemeao|phonemeoh|phonemeou|vwide|vtighto)/;
-const BUILD_ID = "20260527-finalanim-amplitude-sync";
+const RHUBARB_CUE_LOOKAHEAD_SECONDS = 0.045;
+const BUILD_ID = "20260601-finalanim-cue-driven-kevin";
 const PARTICIPANT_ID_PATTERN = /^[A-Za-z0-9_-]{3,40}$/;
 
 const appEl = document.getElementById("app");
@@ -1228,36 +1229,37 @@ function getBandAverage(startRatio, endRatio) {
 
 function getRhubarbCueAt(time) {
   if (!rhubarbMouthCues.length) return null;
+  const cueTime = time + RHUBARB_CUE_LOOKAHEAD_SECONDS;
   while (
     rhubarbCueIndex < rhubarbMouthCues.length - 1 &&
-    time >= Number(rhubarbMouthCues[rhubarbCueIndex].end || 0)
+    cueTime >= Number(rhubarbMouthCues[rhubarbCueIndex].end || 0) + 0.01
   ) {
     rhubarbCueIndex += 1;
   }
   const cue = rhubarbMouthCues[rhubarbCueIndex];
   const start = Number(cue?.start || 0);
   const end = Number(cue?.end || start);
-  return time >= start && time <= end + 0.035 ? cue : null;
+  return cueTime >= start - 0.018 && cueTime <= end + 0.05 ? cue : null;
 }
 
 function getRhubarbShapeTarget(shape) {
   switch (String(shape || "X").toUpperCase()) {
     case "A":
-      return { mouth: 0.06, activity: 0.55, close: 0.5 };
+      return { mouth: 0.03, activity: 0.35, close: 0.82 };
     case "B":
-      return { mouth: 0.22, activity: 0.9, consonant: 0.58, close: 0.22 };
+      return { mouth: 0.07, activity: 0.95, consonant: 0.82, close: 0.78 };
     case "C":
-      return { mouth: 0.55, activity: 0.98 };
+      return { mouth: 0.38, activity: 1, wide: 0.82, close: 0.04 };
     case "D":
-      return { mouth: 0.78, activity: 1 };
+      return { mouth: 0.64, activity: 1, wide: 0.12 };
     case "E":
-      return { mouth: 0.43, activity: 0.98, round: 0.58 };
+      return { mouth: 0.36, activity: 1, round: 0.86 };
     case "F":
-      return { mouth: 0.34, activity: 0.98, round: 0.84 };
+      return { mouth: 0.26, activity: 1, round: 1, close: 0.1 };
     case "G":
-      return { mouth: 0.2, activity: 0.92, consonant: 0.72, close: 0.18 };
+      return { mouth: 0.12, activity: 0.96, consonant: 0.95, close: 0.42 };
     case "H":
-      return { mouth: 0.56, activity: 1, consonant: 0.48, tongue: 0.9 };
+      return { mouth: 0.34, activity: 1, wide: 0.18, consonant: 0.72, tongue: 0.95 };
     case "X":
     default:
       return { mouth: 0, activity: 0, close: 0 };
@@ -1271,15 +1273,15 @@ function computeRhubarbLipSyncTarget(delta) {
   const targetState = getRhubarbShapeTarget(cue?.value || "X");
   const mouthTarget = targetState.mouth || 0;
   const activityTarget = targetState.activity || 0;
-  const response = mouthTarget > mouthSmoothed ? LIP_SYNC_ATTACK * 1.25 : LIP_SYNC_RELEASE * 1.35;
+  const response = mouthTarget > mouthSmoothed ? LIP_SYNC_ATTACK * 1.45 : LIP_SYNC_RELEASE * 1.55;
 
   mouthSmoothed += (mouthTarget - mouthSmoothed) * Math.min(1, delta * response);
   speechState.activity += (activityTarget - speechState.activity) * Math.min(1, delta * 20);
-  speechState.wide += (0 - speechState.wide) * Math.min(1, delta * 16);
-  speechState.round += ((targetState.round || 0) - speechState.round) * Math.min(1, delta * 20);
+  speechState.wide += ((targetState.wide || 0) - speechState.wide) * Math.min(1, delta * 24);
+  speechState.round += ((targetState.round || 0) - speechState.round) * Math.min(1, delta * 24);
   speechState.consonant +=
-    ((targetState.consonant || 0) - speechState.consonant) * Math.min(1, delta * 22);
-  speechState.close += ((targetState.close || 0) - speechState.close) * Math.min(1, delta * 22);
+    ((targetState.consonant || 0) - speechState.consonant) * Math.min(1, delta * 30);
+  speechState.close += ((targetState.close || 0) - speechState.close) * Math.min(1, delta * 30);
 
   if (targetState.tongue) {
     speechState.consonant = Math.max(speechState.consonant, targetState.tongue);
@@ -1479,7 +1481,9 @@ function tick() {
   mixer?.update(delta);
 
   if (lipDrivenByAudio && analyser && hasLipSyncTargets()) {
-    mouthSmoothed = computeLipSyncTarget(delta);
+    mouthSmoothed = rhubarbMouthCues.length
+      ? computeRhubarbLipSyncTarget(delta)
+      : computeLipSyncTarget(delta);
     setLipSyncInfluence(mouthSmoothed, delta);
   } else if (!lipDrivenByAudio && mouthSmoothed > 0.002) {
     mouthSmoothed = computeLipSyncTarget(delta);
