@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Split or Steal – Game</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="title">Split or Steal</div>
+      <div class="round-info">
+        Pot per round: $<span id="potLabel">100</span> ·
+        Round <span id="roundCurrent">-</span> /
+        <span id="roundTotal">7</span>
+      </div>
+    </header>
+
+    <main class="card">
+      <section class="player-info">
+        <div>
+          <div class="label">You</div>
+          <div class="value" id="playerNameDisplay">Loading…</div>
+        </div>
+        <div>
+          <div class="label">Opponent</div>
+          <div class="value" id="opponentNameDisplay">
+            Waiting…
+          </div>
+        </div>
+      </section>
+
+      <section class="status-row">
+        <span id="statusText">Connecting to server…</span>
+      </section>
+
+      <!-- NEW: phase + countdown display -->
+      <section class="status-row">
+        <span id="phaseText">Phase: —</span>
+        <span id="timerText" style="margin-left: 12px;">Timer: —</span>
+      </section>
+
+      <section class="explanation-panel">
+        <h2>How the Game Works</h2>
+        <p class="small">
+          You and your opponent will play <strong>7 rounds</strong>. Each round
+          has a fresh pot of <strong>$100</strong>.
+        </p>
+        <ul class="small">
+          <li>Both choose <strong>Split</strong> → you each get <strong>$50</strong>.</li>
+          <li>You choose <strong>Steal</strong>, opponent chooses Split → you get <strong>$100</strong>, they get nothing.</li>
+          <li>You choose Split, opponent chooses <strong>Steal</strong> → you get <strong>$0</strong>, they get $100.</li>
+          <li>Both choose <strong>Steal</strong> → you both get <strong>$0</strong>.</li>
+        </ul>
+        <p class="small">
+          For each round, you have <strong>30 seconds</strong> to discuss and make
+          your choice. After that, there is a <strong>5-second</strong> transition before
+          the next round starts.
+        </p>
+      </section>
+
+      <section class="choices-panel">
+        <h2>Your Choice</h2>
+        <p class="small">
+          During the 30-second choice window, pick <strong>Split</strong> or
+          <strong>Steal</strong>. Once you choose, it cannot be changed.
+        </p>
+        <div class="choices">
+          <button class="btn primary" id="splitBtn" disabled>Split</button>
+          <button class="btn danger" id="stealBtn" disabled>Steal</button>
+        </div>
+      </section>
+
+      <section class="result-panel">
+        <h2>Round Result</h2>
+        <p id="resultText">
+          Waiting for opponent and first round to begin…
+        </p>
+        <div class="actions">
+          <button class="btn secondary" id="backToLobbyBtn" style="display:none;">
+            Back to Lobby
+          </button>
+        </div>
+      </section>
+
+      <section class="history-panel">
+        <h2>Your History (this session)</h2>
+        <p class="help-text">
+          You see your own rounds here: opponent, choices, payout for that round, and outcome.
+        </p>
+        <pre id="historyLog" class="log">No rounds yet.</pre>
+      </section>
+    </main>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="script.js" defer></script>
+</body>
+</html>

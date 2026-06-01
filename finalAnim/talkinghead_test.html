@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>TalkingHead Compatibility Test</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f3f4f6;
+        --surface: #ffffff;
+        --border: #d1d5db;
+        --text: #111827;
+        --muted: #4b5563;
+        --primary: #1f4f8a;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background: var(--bg);
+        color: var(--text);
+        font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 340px;
+      }
+      #avatar {
+        min-height: 100vh;
+        background: #dfe5ed;
+      }
+      aside {
+        border-left: 1px solid var(--border);
+        background: var(--surface);
+        padding: 18px;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      h1 {
+        margin: 0;
+        font-size: 1.1rem;
+      }
+      p {
+        margin: 0;
+        color: var(--muted);
+        font-size: 0.88rem;
+        line-height: 1.45;
+      }
+      label {
+        display: grid;
+        gap: 6px;
+        font-size: 0.86rem;
+        font-weight: 700;
+      }
+      select,
+      textarea,
+      button {
+        font: inherit;
+      }
+      select,
+      textarea {
+        width: 100%;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 0.65rem;
+      }
+      textarea {
+        min-height: 88px;
+        resize: vertical;
+      }
+      button {
+        border: 0;
+        border-radius: 8px;
+        padding: 0.75rem 0.9rem;
+        background: var(--primary);
+        color: #fff;
+        font-weight: 700;
+        cursor: pointer;
+      }
+      button:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+      #status {
+        white-space: pre-wrap;
+        min-height: 5rem;
+        padding: 0.75rem;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: #f9fafb;
+        color: var(--muted);
+        font-size: 0.82rem;
+        line-height: 1.4;
+      }
+      @media (max-width: 820px) {
+        body {
+          grid-template-columns: 1fr;
+        }
+        #avatar {
+          min-height: 58vh;
+        }
+        aside {
+          border-left: 0;
+          border-top: 1px solid var(--border);
+        }
+      }
+    </style>
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js/+esm",
+          "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/",
+          "talkinghead": "https://cdn.jsdelivr.net/gh/met4citizen/TalkingHead@1.7/modules/talkinghead.mjs"
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <main id="avatar"></main>
+    <aside>
+      <h1>TalkingHead test</h1>
+      <p>
+        This is a compatibility sandbox. It does not replace the main study UI.
+        It checks whether our GLB avatars work with TalkingHead's viseme stack.
+      </p>
+      <label>
+        Avatar
+        <select id="avatar-select">
+          <option value="/kevin.glb" data-body="M">Kevin</option>
+          <option value="/female.glb" data-body="F">Female</option>
+        </select>
+      </label>
+      <button id="load">Load avatar</button>
+      <label>
+        Test line
+        <textarea id="prompt">This is a short test of the TalkingHead lip sync system.</textarea>
+      </label>
+      <button id="speak" disabled>Ask server + speak</button>
+      <div id="status">Ready.</div>
+    </aside>
+    <script type="module">
+      import { TalkingHead } from "talkinghead";
+
+      const avatarNode = document.getElementById("avatar");
+      const avatarSelect = document.getElementById("avatar-select");
+      const loadBtn = document.getElementById("load");
+      const speakBtn = document.getElementById("speak");
+      const promptEl = document.getElementById("prompt");
+      const statusEl = document.getElementById("status");
+
+      let head = null;
+
+      function setStatus(message) {
+        statusEl.textContent = message;
+      }
+
+      function base64ToArrayBuffer(b64) {
+        const binary = atob(b64);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+        return bytes.buffer;
+      }
+
+      function rhubarbToOculus(value) {
+        return (
+          {
+            A: "viseme_sil",
+            B: "viseme_PP",
+            C: "viseme_E",
+            D: "viseme_aa",
+            E: "viseme_O",
+            F: "viseme_U",
+            G: "viseme_FF",
+            H: "viseme_RR",
+            X: "viseme_sil",
+          }[value] || "viseme_sil"
+        );
+      }
+
+      function cuesToVisemes(cues) {
+        const valid = Array.isArray(cues) ? cues : [];
+        return {
+          visemes: valid.map((cue) => rhubarbToOculus(cue.value)),
+          vtimes: valid.map((cue) => Math.max(0, Number(cue.start || 0) * 1000)),
+          vdurations: valid.map((cue) =>
+            Math.max(20, (Number(cue.end || 0) - Number(cue.start || 0)) * 1000)
+          ),
+        };
+      }
+
+      async function loadAvatar() {
+        speakBtn.disabled = true;
+        setStatus("Loading TalkingHead module/avatar...");
+        avatarNode.textContent = "";
+        head = new TalkingHead(avatarNode, {
+          lipsyncModules: ["en"],
+          lipsyncLang: "en",
+          cameraView: "upper",
+          cameraRotateEnable: false,
+          cameraPanEnable: false,
+          cameraZoomEnable: false,
+          modelPixelRatio: Math.min(window.devicePixelRatio || 1, 2),
+        });
+
+        const selected = avatarSelect.selectedOptions[0];
+        try {
+          await head.showAvatar({
+            url: avatarSelect.value,
+            body: selected?.dataset.body || "M",
+            lipsyncLang: "en",
+            avatarMood: "neutral",
+          });
+          speakBtn.disabled = false;
+          setStatus(
+            "Loaded. If the avatar looks broken or throws blendshape warnings, our GLB is not fully TalkingHead-compatible."
+          );
+        } catch (error) {
+          console.error(error);
+          setStatus(`TalkingHead load failed:\n${error?.message || error}`);
+        }
+      }
+
+      async function speak() {
+        if (!head) return;
+        speakBtn.disabled = true;
+        setStatus("Requesting reply/audio from existing /api/ask...");
+        try {
+          const res = await fetch("/api/ask", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              text: promptEl.value || "Say one sentence.",
+              session_id: "talkinghead_test",
+            }),
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+          const audio = await head.audioCtx.decodeAudioData(base64ToArrayBuffer(data.audio_base64));
+          const visemeData = cuesToVisemes(data.mouth_cues);
+          setStatus(`Reply:\n${data.reply}\n\nPlaying with ${visemeData.visemes.length} Rhubarb-derived viseme cues.`);
+          await head.speakAudio({
+            audio,
+            ...visemeData,
+          });
+        } catch (error) {
+          console.error(error);
+          setStatus(`Speak test failed:\n${error?.message || error}`);
+        } finally {
+          speakBtn.disabled = false;
+        }
+      }
+
+      loadBtn.addEventListener("click", loadAvatar);
+      speakBtn.addEventListener("click", speak);
+      loadAvatar();
+    </script>
+  </body>
+</html>

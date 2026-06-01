@@ -1,0 +1,9 @@
+.DS_Store
+.env
+.venv/
+node_modules/
+participant_logs/
+rounds_log.csv
+__pycache__/
+*.pyc
+.playwright-cli/

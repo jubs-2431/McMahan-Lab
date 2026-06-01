@@ -1,0 +1,415 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Kevin — Voice</title>
+    <link rel="icon" href="data:," />
+    <style>
+      :root {
+        --page-bg: #f3f4f6;
+        --surface: #ffffff;
+        --surface-muted: #f8fafc;
+        --border: #d7dde5;
+        --border-strong: #c4ccd6;
+        --text: #111827;
+        --text-muted: #556274;
+        --primary: #1f4f8a;
+        --primary-hover: #183f6f;
+        --success: #2e6b57;
+        --success-hover: #245444;
+        --danger: #a84c45;
+        --shadow: 0 12px 30px rgba(15, 23, 42, 0.08);
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: var(--page-bg);
+        color: var(--text);
+        font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+      body {
+        display: grid;
+        place-items: center;
+      }
+      #app {
+        width: min(1100px, 100%);
+        min-height: 100%;
+        padding: 24px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 18px;
+      }
+      #app.needs-login #stage,
+      #app.needs-login #ui {
+        display: none;
+      }
+      #app:not(.needs-login) #login-screen {
+        display: none;
+      }
+      #login-screen {
+        width: min(420px, 100%);
+        padding: 24px;
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        background: var(--surface);
+        box-shadow: var(--shadow);
+      }
+      #login-screen h1 {
+        margin: 0 0 0.55rem;
+        font-size: 1.35rem;
+        line-height: 1.2;
+      }
+      #login-screen p {
+        margin: 0 0 1rem;
+        color: var(--text-muted);
+        font-size: 0.95rem;
+        line-height: 1.45;
+      }
+      #participant-form {
+        display: flex;
+        flex-direction: column;
+        gap: 0.75rem;
+      }
+      #setup-avatar {
+        margin: 0 0 1rem;
+      }
+      #setup-avatar-label {
+        margin: 0 0 0.45rem;
+        font-size: 0.88rem;
+        font-weight: 700;
+        color: var(--text);
+      }
+      #participant-id {
+        min-height: 3rem;
+        border-radius: 10px;
+        border: 1px solid var(--border);
+        padding: 0.75rem 0.9rem;
+        font: inherit;
+      }
+      #participant-id:focus {
+        outline: none;
+        border-color: var(--primary);
+        box-shadow: 0 0 0 3px rgba(31, 79, 138, 0.12);
+      }
+      #participant-submit,
+      #change-participant {
+        border: none;
+        border-radius: 10px;
+        padding: 0.8rem 1rem;
+        font: inherit;
+        font-weight: 700;
+        cursor: pointer;
+      }
+      #participant-submit {
+        background: var(--primary);
+        color: #fff;
+      }
+      #participant-error {
+        min-height: 1.1rem;
+        color: var(--danger);
+        font-size: 0.84rem;
+      }
+      #stage {
+        position: relative;
+        width: min(960px, 100%);
+        aspect-ratio: 16 / 9;
+        border-radius: 18px;
+        overflow: hidden;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        box-shadow: var(--shadow);
+      }
+      #viewport {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        display: block;
+      }
+      #stage::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.4);
+      }
+      #ui {
+        width: min(960px, 100%);
+        padding: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 0.85rem;
+      }
+      #chat-form {
+        width: min(720px, 100%);
+        display: flex;
+        gap: 0.75rem;
+        align-items: stretch;
+      }
+      #chat-input {
+        flex: 1;
+        min-height: 3.2rem;
+        resize: vertical;
+        border-radius: 12px;
+        border: 1px solid var(--border);
+        background: var(--surface);
+        color: var(--text);
+        padding: 0.9rem 1rem;
+        font: inherit;
+        line-height: 1.4;
+        box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+      }
+      #chat-input:focus {
+        outline: none;
+        border-color: var(--primary);
+        box-shadow: 0 0 0 3px rgba(31, 79, 138, 0.12);
+      }
+      #chat-input::placeholder {
+        color: #7a8797;
+      }
+      #send,
+      #speak {
+        border: none;
+        border-radius: 12px;
+        padding: 0.85rem 1.2rem;
+        font-size: 0.95rem;
+        font-weight: 600;
+        cursor: pointer;
+        color: #fff;
+        transition: background-color 0.15s ease, opacity 0.15s ease, border-color 0.15s ease;
+      }
+      #send {
+        min-width: 104px;
+        background: var(--success);
+      }
+      #send:hover:not(:disabled) {
+        background: var(--success-hover);
+      }
+      #send:disabled,
+      #speak:disabled {
+        opacity: 0.45;
+        cursor: not-allowed;
+      }
+      #status {
+        font-size: 0.9rem;
+        color: var(--text-muted);
+        text-align: center;
+        max-width: 32rem;
+        line-height: 1.4;
+      }
+      #transcript {
+        width: min(720px, 100%);
+        min-height: 1.4rem;
+        font-size: 0.86rem;
+        color: var(--text-muted);
+        text-align: center;
+        line-height: 1.45;
+      }
+      #voice-note {
+        font-size: 0.82rem;
+        color: var(--text-muted);
+        text-align: center;
+        max-width: 36rem;
+        line-height: 1.45;
+      }
+      #history {
+        width: min(720px, 100%);
+        max-height: 190px;
+        overflow: auto;
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        background: var(--surface);
+        padding: 0.75rem;
+        display: flex;
+        flex-direction: column;
+        gap: 0.55rem;
+        font-size: 0.86rem;
+        line-height: 1.4;
+      }
+      .history-empty {
+        color: var(--text-muted);
+        text-align: center;
+      }
+      .history-item {
+        color: var(--text);
+      }
+      .history-meta {
+        color: var(--text-muted);
+        font-size: 0.78rem;
+      }
+      #participant-bar {
+        width: min(720px, 100%);
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 0.75rem;
+        color: var(--text-muted);
+        font-size: 0.84rem;
+      }
+      #change-participant {
+        border: 1px solid var(--border-strong);
+        background: var(--surface);
+        color: var(--text);
+        padding: 0.45rem 0.7rem;
+        font-size: 0.8rem;
+      }
+      #speak {
+        min-width: 160px;
+        background: var(--primary);
+      }
+      #speak:hover:not(:disabled) {
+        background: var(--primary-hover);
+      }
+      #speak.listening {
+        background: var(--danger);
+      }
+      #game-actions {
+        width: min(720px, 100%);
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0.75rem;
+      }
+      #avatar-actions {
+        width: 100%;
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0.75rem;
+      }
+      .avatar-choice {
+        border: 1px solid var(--border-strong);
+        border-radius: 12px;
+        background: var(--surface);
+        color: var(--text);
+        padding: 0.75rem 1rem;
+        font: inherit;
+        font-weight: 700;
+        cursor: pointer;
+        box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+        transition: border-color 0.15s ease, background-color 0.15s ease, opacity 0.15s ease;
+      }
+      .avatar-choice.active {
+        border-color: var(--primary);
+        background: var(--surface-muted);
+        color: var(--primary);
+      }
+      .avatar-choice:hover:not(:disabled) {
+        border-color: var(--primary);
+        background: var(--surface-muted);
+      }
+      .avatar-choice:disabled {
+        opacity: 0.45;
+        cursor: not-allowed;
+      }
+      .game-choice {
+        border: 1px solid var(--border-strong);
+        border-radius: 12px;
+        background: var(--surface);
+        color: var(--text);
+        padding: 0.85rem 1rem;
+        font: inherit;
+        font-weight: 700;
+        cursor: pointer;
+        box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+        transition: border-color 0.15s ease, background-color 0.15s ease, opacity 0.15s ease;
+      }
+      .game-choice:hover:not(:disabled) {
+        border-color: var(--primary);
+        background: var(--surface-muted);
+      }
+      .game-choice:disabled {
+        opacity: 0.45;
+        cursor: not-allowed;
+      }
+      @media (max-width: 760px) {
+        #app {
+          padding: 14px;
+          gap: 14px;
+        }
+        #stage {
+          border-radius: 14px;
+        }
+        #chat-form {
+          flex-direction: column;
+        }
+        #send {
+          width: 100%;
+        }
+      }
+    </style>
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+          "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <div id="app" class="needs-login">
+      <section id="login-screen" aria-labelledby="login-title">
+        <h1 id="login-title">Participant ID</h1>
+        <p>Enter the ID from the slip of paper.</p>
+        <div id="setup-avatar">
+          <div id="setup-avatar-label">Avatar</div>
+          <div id="avatar-actions" aria-label="Avatar choices">
+            <button type="button" class="avatar-choice" data-avatar="male" disabled>Male</button>
+            <button type="button" class="avatar-choice" data-avatar="female" disabled>Female</button>
+          </div>
+        </div>
+        <form id="participant-form">
+          <input
+            id="participant-id"
+            name="participant-id"
+            type="text"
+            autocomplete="off"
+            autocapitalize="characters"
+            spellcheck="false"
+            placeholder="Example: P001"
+            required
+          />
+          <button type="submit" id="participant-submit">Continue</button>
+          <div id="participant-error" role="alert" aria-live="polite"></div>
+        </form>
+      </section>
+      <div id="stage">
+        <canvas id="viewport"></canvas>
+      </div>
+      <div id="ui">
+        <div id="participant-bar">
+          <span id="participant-label">Participant ID: --</span>
+          <button type="button" id="change-participant">Change ID</button>
+        </div>
+        <form id="chat-form">
+          <textarea
+            id="chat-input"
+            rows="2"
+            placeholder="Type a message to Kevin"
+            autocomplete="off"
+          ></textarea>
+          <button type="submit" id="send" disabled>Send</button>
+        </form>
+        <div id="game-actions" aria-label="Split or steal choices">
+          <button type="button" class="game-choice" data-choice="split" disabled>Split</button>
+          <button type="button" class="game-choice" data-choice="steal" disabled>Steal</button>
+        </div>
+        <button type="button" id="speak" disabled>Speak</button>
+        <div id="status">Loading avatar…</div>
+        <div id="transcript"></div>
+        <div id="history" aria-live="polite">
+          <div class="history-empty">No dialogue yet.</div>
+        </div>
+        <div id="voice-note">Type a message or tap Speak once to keep the conversation running. Tap Stop speaking to end voice mode.</div>
+      </div>
+    </div>
+    <script type="module" src="/main.js?v=20260601-avatar-setup"></script>
+  </body>
+</html>
