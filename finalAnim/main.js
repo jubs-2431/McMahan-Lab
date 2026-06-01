@@ -1,7 +1,6 @@
 import * as THREE from "three";
 import { DRACOLoader } from "three/addons/loaders/DRACOLoader.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
-import { HeadTTS } from "headtts";
 
 const AVATARS = {
   male: { label: "Male", url: "/kevin.glb" },
@@ -25,12 +24,7 @@ const LIP_SYNC_MESH_INCLUDE_PATTERN = /^(ccbasebody|ccbaseteeth|ccbasetongue)$/;
 const LIP_SYNC_EXCLUDE_PATTERN = /(blink|brow|tongue|eye|squint|cheek|nostril|smile|frown|close|press|pucker|purse|funnel|stretch|narrow|roll|tight|suck)/;
 const LIP_SYNC_OPEN_PATTERN = /(jawopen|mouthopen|openjaw|openmouth|vopen|vlipopen)/;
 const LIP_SYNC_VOWEL_PATTERN = /(visemeaa|visemeah|visemeao|visemeoh|visemeou|phonemeaa|phonemeah|phonemeao|phonemeoh|phonemeou|vwide|vtighto)/;
-const HEADTTS_WORKER_MODULE =
-  "https://cdn.jsdelivr.net/npm/@met4citizen/headtts@1.3/modules/worker-tts.mjs";
-const HEADTTS_DICTIONARY_URL = "https://cdn.jsdelivr.net/npm/@met4citizen/headtts@1.3/dictionaries/";
-const RHUBARB_CUE_LOOKAHEAD_SECONDS = 0.045;
-const HEADTTS_CUE_LOOKAHEAD_SECONDS = 0.035;
-const BUILD_ID = "20260601-finalanim-kevin-headtts";
+const BUILD_ID = "20260527-finalanim-amplitude-sync";
 const PARTICIPANT_ID_PATTERN = /^[A-Za-z0-9_-]{3,40}$/;
 
 const appEl = document.getElementById("app");
@@ -1167,11 +1161,6 @@ let freqData = null;
 let currentReplyAudio = null;
 let rhubarbMouthCues = [];
 let rhubarbCueIndex = 0;
-let headTTS = null;
-let headTTSReadyPromise = null;
-let headTTSVisemeCues = [];
-let headTTSVisemeIndex = 0;
-let headTTSAudioStartTime = 0;
 const lipSyncDebug = {
   active: false,
   frames: 0,
@@ -1239,37 +1228,36 @@ function getBandAverage(startRatio, endRatio) {
 
 function getRhubarbCueAt(time) {
   if (!rhubarbMouthCues.length) return null;
-  const cueTime = time + RHUBARB_CUE_LOOKAHEAD_SECONDS;
   while (
     rhubarbCueIndex < rhubarbMouthCues.length - 1 &&
-    cueTime >= Number(rhubarbMouthCues[rhubarbCueIndex].end || 0) + 0.01
+    time >= Number(rhubarbMouthCues[rhubarbCueIndex].end || 0)
   ) {
     rhubarbCueIndex += 1;
   }
   const cue = rhubarbMouthCues[rhubarbCueIndex];
   const start = Number(cue?.start || 0);
   const end = Number(cue?.end || start);
-  return cueTime >= start - 0.018 && cueTime <= end + 0.05 ? cue : null;
+  return time >= start && time <= end + 0.035 ? cue : null;
 }
 
 function getRhubarbShapeTarget(shape) {
   switch (String(shape || "X").toUpperCase()) {
     case "A":
-      return { mouth: 0.03, activity: 0.35, close: 0.82 };
+      return { mouth: 0.06, activity: 0.55, close: 0.5 };
     case "B":
-      return { mouth: 0.07, activity: 0.95, consonant: 0.82, close: 0.78 };
+      return { mouth: 0.22, activity: 0.9, consonant: 0.58, close: 0.22 };
     case "C":
-      return { mouth: 0.38, activity: 1, wide: 0.82, close: 0.04 };
+      return { mouth: 0.55, activity: 0.98 };
     case "D":
-      return { mouth: 0.64, activity: 1, wide: 0.12 };
+      return { mouth: 0.78, activity: 1 };
     case "E":
-      return { mouth: 0.36, activity: 1, round: 0.86 };
+      return { mouth: 0.43, activity: 0.98, round: 0.58 };
     case "F":
-      return { mouth: 0.26, activity: 1, round: 1, close: 0.1 };
+      return { mouth: 0.34, activity: 0.98, round: 0.84 };
     case "G":
-      return { mouth: 0.12, activity: 0.96, consonant: 0.95, close: 0.42 };
+      return { mouth: 0.2, activity: 0.92, consonant: 0.72, close: 0.18 };
     case "H":
-      return { mouth: 0.34, activity: 1, wide: 0.18, consonant: 0.72, tongue: 0.95 };
+      return { mouth: 0.56, activity: 1, consonant: 0.48, tongue: 0.9 };
     case "X":
     default:
       return { mouth: 0, activity: 0, close: 0 };
@@ -1283,102 +1271,15 @@ function computeRhubarbLipSyncTarget(delta) {
   const targetState = getRhubarbShapeTarget(cue?.value || "X");
   const mouthTarget = targetState.mouth || 0;
   const activityTarget = targetState.activity || 0;
-  const response = mouthTarget > mouthSmoothed ? LIP_SYNC_ATTACK * 1.45 : LIP_SYNC_RELEASE * 1.55;
+  const response = mouthTarget > mouthSmoothed ? LIP_SYNC_ATTACK * 1.25 : LIP_SYNC_RELEASE * 1.35;
 
   mouthSmoothed += (mouthTarget - mouthSmoothed) * Math.min(1, delta * response);
   speechState.activity += (activityTarget - speechState.activity) * Math.min(1, delta * 20);
-  speechState.wide += ((targetState.wide || 0) - speechState.wide) * Math.min(1, delta * 24);
-  speechState.round += ((targetState.round || 0) - speechState.round) * Math.min(1, delta * 24);
-  speechState.consonant +=
-    ((targetState.consonant || 0) - speechState.consonant) * Math.min(1, delta * 30);
-  speechState.close += ((targetState.close || 0) - speechState.close) * Math.min(1, delta * 30);
-
-  if (targetState.tongue) {
-    speechState.consonant = Math.max(speechState.consonant, targetState.tongue);
-  }
-
-  return mouthSmoothed;
-}
-
-function normalizeHeadTTSVisemeCues(data) {
-  const visemes = Array.isArray(data?.visemes) ? data.visemes : [];
-  const starts = Array.isArray(data?.vtimes) ? data.vtimes : [];
-  const durations = Array.isArray(data?.vdurations) ? data.vdurations : [];
-  return visemes
-    .map((viseme, index) => {
-      const start = Number(starts[index] || 0) / 1000;
-      const duration = Math.max(0.018, Number(durations[index] || 0) / 1000);
-      return {
-        viseme: String(viseme || "sil"),
-        start,
-        end: start + duration,
-      };
-    })
-    .filter((cue) => Number.isFinite(cue.start) && Number.isFinite(cue.end));
-}
-
-function getHeadTTSCueAt(time) {
-  if (!headTTSVisemeCues.length) return null;
-  const cueTime = time + HEADTTS_CUE_LOOKAHEAD_SECONDS;
-  while (
-    headTTSVisemeIndex < headTTSVisemeCues.length - 1 &&
-    cueTime >= Number(headTTSVisemeCues[headTTSVisemeIndex].end || 0) + 0.008
-  ) {
-    headTTSVisemeIndex += 1;
-  }
-  const cue = headTTSVisemeCues[headTTSVisemeIndex];
-  return cueTime >= cue.start - 0.012 && cueTime <= cue.end + 0.04 ? cue : null;
-}
-
-function getHeadTTSVisemeTarget(viseme) {
-  switch (String(viseme || "sil")) {
-    case "PP":
-      return { mouth: 0.035, activity: 1, consonant: 0.86, close: 0.9 };
-    case "FF":
-      return { mouth: 0.08, activity: 1, consonant: 0.92, close: 0.48 };
-    case "TH":
-    case "DD":
-    case "nn":
-    case "kk":
-    case "CH":
-      return { mouth: 0.18, activity: 1, consonant: 0.82, close: 0.28, tongue: 0.75 };
-    case "SS":
-      return { mouth: 0.1, activity: 1, wide: 0.42, consonant: 0.78, close: 0.22 };
-    case "aa":
-      return { mouth: 0.56, activity: 1, wide: 0.1 };
-    case "E":
-      return { mouth: 0.32, activity: 1, wide: 0.9 };
-    case "I":
-      return { mouth: 0.28, activity: 1, wide: 0.78 };
-    case "O":
-      return { mouth: 0.32, activity: 1, round: 0.9 };
-    case "U":
-      return { mouth: 0.24, activity: 1, round: 1, close: 0.08 };
-    case "RR":
-      return { mouth: 0.24, activity: 1, round: 0.42, consonant: 0.36 };
-    case "sil":
-    default:
-      return { mouth: 0, activity: 0, close: 0.18 };
-  }
-}
-
-function computeHeadTTSLipSyncTarget(delta) {
-  if (!audioCtx || !headTTSVisemeCues.length) return null;
-
-  const elapsed = Math.max(0, audioCtx.currentTime - headTTSAudioStartTime);
-  const cue = getHeadTTSCueAt(elapsed);
-  const targetState = getHeadTTSVisemeTarget(cue?.viseme || "sil");
-  const mouthTarget = targetState.mouth || 0;
-  const activityTarget = targetState.activity || 0;
-  const response = mouthTarget > mouthSmoothed ? LIP_SYNC_ATTACK * 1.2 : LIP_SYNC_RELEASE * 1.15;
-
-  mouthSmoothed += (mouthTarget - mouthSmoothed) * Math.min(1, delta * response);
-  speechState.activity += (activityTarget - speechState.activity) * Math.min(1, delta * 18);
-  speechState.wide += ((targetState.wide || 0) - speechState.wide) * Math.min(1, delta * 20);
+  speechState.wide += (0 - speechState.wide) * Math.min(1, delta * 16);
   speechState.round += ((targetState.round || 0) - speechState.round) * Math.min(1, delta * 20);
   speechState.consonant +=
-    ((targetState.consonant || 0) - speechState.consonant) * Math.min(1, delta * 24);
-  speechState.close += ((targetState.close || 0) - speechState.close) * Math.min(1, delta * 24);
+    ((targetState.consonant || 0) - speechState.consonant) * Math.min(1, delta * 22);
+  speechState.close += ((targetState.close || 0) - speechState.close) * Math.min(1, delta * 22);
 
   if (targetState.tongue) {
     speechState.consonant = Math.max(speechState.consonant, targetState.tongue);
@@ -1578,9 +1479,7 @@ function tick() {
   mixer?.update(delta);
 
   if (lipDrivenByAudio && analyser && hasLipSyncTargets()) {
-    mouthSmoothed = headTTSVisemeCues.length
-      ? computeHeadTTSLipSyncTarget(delta)
-      : computeLipSyncTarget(delta);
+    mouthSmoothed = computeLipSyncTarget(delta);
     setLipSyncInfluence(mouthSmoothed, delta);
   } else if (!lipDrivenByAudio && mouthSmoothed > 0.002) {
     mouthSmoothed = computeLipSyncTarget(delta);
@@ -1653,8 +1552,6 @@ async function playReplyAudio(base64, mime, mouthCues = []) {
   currentReplyAudio = audio;
   rhubarbMouthCues = Array.isArray(mouthCues) ? mouthCues : [];
   rhubarbCueIndex = 0;
-  headTTSVisemeCues = [];
-  headTTSVisemeIndex = 0;
   beginLipSyncDebug();
 
   const srcNode = audioCtx.createMediaElementSource(audio);
@@ -1670,8 +1567,6 @@ async function playReplyAudio(base64, mime, mouthCues = []) {
     currentReplyAudio = null;
     rhubarbMouthCues = [];
     rhubarbCueIndex = 0;
-    headTTSVisemeCues = [];
-    headTTSVisemeIndex = 0;
     resetLipSync();
     URL.revokeObjectURL(url);
     try {
@@ -1701,124 +1596,6 @@ async function playReplyAudio(base64, mime, mouthCues = []) {
   });
 }
 
-function getHeadTTSVoice() {
-  return currentAvatarKey === "female" ? "af_bella" : "am_fenrir";
-}
-
-async function ensureHeadTTS() {
-  ensureAudioGraph();
-  if (headTTS) return headTTS;
-  if (headTTSReadyPromise) return headTTSReadyPromise;
-
-  headTTS = new HeadTTS({
-    audioCtx,
-    endpoints: ["webgpu", "wasm"],
-    languages: ["en-us"],
-    voices: ["am_fenrir", "af_bella"],
-    workerModule: HEADTTS_WORKER_MODULE,
-    dictionaryURL: HEADTTS_DICTIONARY_URL,
-  });
-  headTTS.onerror = (error) => {
-    console.error("HeadTTS error:", error);
-  };
-
-  headTTSReadyPromise = (async () => {
-    await headTTS.connect(null, (event) => {
-      if (!requestInFlight) return;
-      if (event?.loaded && event?.total) {
-        const pct = Math.round((event.loaded / event.total) * 100);
-        setStatus(`Loading HeadTTS voice model... ${pct}%`);
-      } else {
-        setStatus("Loading HeadTTS voice model...");
-      }
-    });
-    await headTTS.setup({
-      voice: getHeadTTSVoice(),
-      language: "en-us",
-      speed: 1,
-      audioEncoding: "wav",
-    });
-    return headTTS;
-  })();
-
-  try {
-    return await headTTSReadyPromise;
-  } catch (error) {
-    headTTS = null;
-    headTTSReadyPromise = null;
-    throw error;
-  }
-}
-
-async function synthesizeHeadTTS(text) {
-  const tts = await ensureHeadTTS();
-  await tts.setup({
-    voice: getHeadTTSVoice(),
-    language: "en-us",
-    speed: 1,
-    audioEncoding: "wav",
-  });
-  const messages = await tts.synthesize({ input: text });
-  const errorMessage = messages.find((message) => message.type === "error");
-  if (errorMessage) {
-    throw new Error(errorMessage.data?.error || "HeadTTS synthesis failed");
-  }
-  const audioMessage = messages.find((message) => message.type === "audio" && message.data?.audio);
-  if (!audioMessage) {
-    throw new Error("HeadTTS did not return audio");
-  }
-  return audioMessage.data;
-}
-
-async function playHeadTTSAudio(audioData) {
-  ensureAudioGraph();
-  transitionToIdle(0.18);
-
-  const audioBuffer = audioData?.audio;
-  if (!audioBuffer) throw new Error("HeadTTS audio buffer is missing");
-
-  const source = audioCtx.createBufferSource();
-  source.buffer = audioBuffer;
-  source.connect(analyser);
-  analyser.connect(audioCtx.destination);
-
-  currentReplyAudio = null;
-  rhubarbMouthCues = [];
-  rhubarbCueIndex = 0;
-  headTTSVisemeCues = normalizeHeadTTSVisemeCues(audioData);
-  headTTSVisemeIndex = 0;
-  beginLipSyncDebug();
-
-  lipDrivenByAudio = true;
-  resetLipSync();
-
-  const cleanupAudio = () => {
-    endLipSyncDebug();
-    lipDrivenByAudio = false;
-    headTTSVisemeCues = [];
-    headTTSVisemeIndex = 0;
-    headTTSAudioStartTime = 0;
-    resetLipSync();
-    try {
-      source.disconnect();
-    } catch (_) {}
-  };
-
-  await audioCtx.resume();
-  headTTSAudioStartTime = audioCtx.currentTime;
-  source.start();
-
-  await new Promise((resolve) => {
-    source.onended = () => {
-      cleanupAudio();
-      if (voiceModeEnabled) {
-        setStatus("Listening for your next question...");
-      }
-      resolve();
-    };
-  });
-}
-
 async function sendTranscript(text) {
   const cleanedText = (text || "").trim();
   if (!cleanedText || requestInFlight || !participantActive || !conversationSessionId) return;
@@ -1834,7 +1611,7 @@ async function sendTranscript(text) {
   updateSendButtonState();
 
   try {
-    const res = await fetch("/api/reply", {
+    const res = await fetch("/api/ask", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -1854,10 +1631,8 @@ async function sendTranscript(text) {
     setStatus(data.reply || "");
     addDialogueEntry({ type: "message", role: "You", text: cleanedText });
     addDialogueEntry({ type: "message", role: "Kevin", text: data.reply || "" });
-    if (data.reply) {
-      setStatus("Synthesizing Kevin with HeadTTS...");
-      const audioData = await synthesizeHeadTTS(data.reply);
-      await playHeadTTSAudio(audioData);
+    if (data.audio_base64) {
+      await playReplyAudio(data.audio_base64, data.audio_mime, data.mouth_cues);
       if (!voiceModeEnabled) {
         setStatus("Tap Speak to start continuous voice mode.");
       }
