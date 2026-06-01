@@ -128,7 +128,13 @@
       <label>
         Avatar
         <select id="avatar-select">
-          <option value="/kevin.glb" data-body="M">Kevin</option>
+          <option
+            value="https://cdn.jsdelivr.net/gh/met4citizen/TalkingHead@1.7/avatars/brunette.glb"
+            data-body="F"
+          >
+            TalkingHead demo avatar
+          </option>
+          <option value="/kevin.glb" data-body="M">Kevin, local rig test</option>
           <option value="/female.glb" data-body="F">Female</option>
         </select>
       </label>
@@ -193,7 +199,7 @@
       function playNaturalGesture() {
         if (!head) return;
         try {
-          head.playGesture?.("salute", 2.2);
+          head.playGesture?.("thumbup", 2.2);
         } catch (error) {
           try {
             head.speakEmoji?.("🙂");
