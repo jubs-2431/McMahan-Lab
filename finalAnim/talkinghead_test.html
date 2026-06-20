@@ -136,6 +136,8 @@
           </option>
           <option value="/kevin.glb" data-body="M">Kevin, local rig test</option>
           <option value="/female.glb" data-body="F">Female</option>
+          <option value="/kevin_talkinghead.glb?v=scale-baked-20260603" data-body="M">Kevin, TalkingHead-compatible</option>
+          <option value="/female_talkinghead.glb?v=scale-baked-20260603" data-body="F">Female, TalkingHead-compatible</option>
         </select>
       </label>
       <button id="load">Load avatar</button>
@@ -147,6 +149,7 @@
       <div id="status">Ready.</div>
     </aside>
     <script type="module">
+      import * as THREE from "three";
       import { TalkingHead } from "talkinghead";
 
       const avatarNode = document.getElementById("avatar");
@@ -160,6 +163,92 @@
 
       function setStatus(message) {
         statusEl.textContent = message;
+      }
+
+      function summarizeAvatar() {
+        if (!head) return "No head instance.";
+        const root = head.armature || head.scene || head.group || null;
+        const lines = [];
+        lines.push(`armature=${head.armature?.name || "missing"}`);
+        lines.push(`camera=${head.camera ? head.camera.position.toArray().map((v) => v.toFixed(3)).join(",") : "missing"}`);
+        if (!root) return lines.join("\n");
+
+        let meshCount = 0;
+        let visibleMeshCount = 0;
+        let skinnedMeshCount = 0;
+        root.traverse?.((obj) => {
+          if (obj.isMesh || obj.isSkinnedMesh) {
+            meshCount += 1;
+            if (obj.visible) visibleMeshCount += 1;
+            if (obj.isSkinnedMesh) skinnedMeshCount += 1;
+            obj.frustumCulled = false;
+          }
+        });
+
+        root.updateMatrixWorld(true);
+        const box = new THREE.Box3().setFromObject(root);
+        const size = box.getSize(new THREE.Vector3());
+        const center = box.getCenter(new THREE.Vector3());
+        lines.push(`meshes=${meshCount}, visible=${visibleMeshCount}, skinned=${skinnedMeshCount}`);
+        lines.push(`center=${center.toArray().map((v) => v.toFixed(3)).join(",")}`);
+        lines.push(`size=${size.toArray().map((v) => v.toFixed(3)).join(",")}`);
+        console.debug("TalkingHead avatar debug", {
+          head,
+          root,
+          camera: head.camera,
+          center,
+          size,
+          box,
+          meshCount,
+          visibleMeshCount,
+          skinnedMeshCount,
+        });
+        window.talkingHeadDebug = { head, root, THREE, box, center, size };
+        return lines.join("\n");
+      }
+
+      function frameLoadedAvatar() {
+        const root = head?.armature;
+        const camera = head?.camera;
+        if (!root || !camera) return;
+        const isCompatAvatar = avatarSelect.value.includes("_talkinghead.glb");
+        root.visible = true;
+        if (isCompatAvatar) {
+          root.rotation.x = Math.PI / 2;
+        }
+        root.traverse((obj) => {
+          if (obj.isMesh || obj.isSkinnedMesh) {
+            obj.visible = true;
+            obj.frustumCulled = false;
+            const materials = Array.isArray(obj.material) ? obj.material : [obj.material];
+            for (const material of materials) {
+              if (!material) continue;
+              material.side = THREE.DoubleSide;
+              material.needsUpdate = true;
+            }
+          }
+        });
+        root.updateMatrixWorld(true);
+        const box = new THREE.Box3().setFromObject(root);
+        const size = box.getSize(new THREE.Vector3());
+        const center = box.getCenter(new THREE.Vector3());
+        if (!Number.isFinite(size.length()) || size.length() <= 0) return;
+        const distance = isCompatAvatar
+          ? Math.max(size.y * 4.0, size.z * 5.0, size.x * 4.0)
+          : Math.max(size.x, size.y, size.z) * 1.35;
+        camera.position.set(center.x, center.y + size.y * 0.08, center.z + distance);
+        camera.near = 0.01;
+        camera.far = 100;
+        camera.lookAt(center.x, center.y + size.y * 0.12, center.z);
+        camera.updateProjectionMatrix?.();
+      }
+
+      function filterOptionalMorphTargets() {
+        if (!head?.mtRandomized || !head?.mtAvatar) return "";
+        const before = head.mtRandomized.length;
+        head.mtRandomized = head.mtRandomized.filter((name) => Boolean(head.mtAvatar[name]));
+        const removed = before - head.mtRandomized.length;
+        return removed ? `optionalMorphsFiltered=${removed}` : "optionalMorphsFiltered=0";
       }
 
       function base64ToArrayBuffer(b64) {
@@ -209,6 +298,21 @@
         }
       }
 
+      function getAvatarOverrides(url) {
+        if (!url.includes("_talkinghead.glb")) return {};
+        return {
+          retarget: {
+            scaleToHipsLevel: 1.0,
+            scaleToEyesLevel: 1.62,
+            origin: { y: 0, z: 0 },
+          },
+          baseline: {
+            eyeBlinkLeft: 0.03,
+            eyeBlinkRight: 0.03,
+          },
+        };
+      }
+
       async function loadAvatar() {
         speakBtn.disabled = true;
         setStatus("Loading TalkingHead module/avatar...");
@@ -216,7 +320,7 @@
         head = new TalkingHead(avatarNode, {
           lipsyncModules: ["en"],
           lipsyncLang: "en",
-          cameraView: "upper",
+          cameraView: "full",
           cameraRotateEnable: false,
           cameraPanEnable: false,
           cameraZoomEnable: false,
@@ -233,10 +337,15 @@
             avatarIdleEyeContact: 0.35,
             avatarSpeakingEyeContact: 0.8,
             avatarSpeakingHeadMove: 0.7,
+            ...getAvatarOverrides(avatarSelect.value),
           });
+          const morphSummary = filterOptionalMorphTargets();
+          head.setView?.("full", { cameraDistance: 0.75, cameraY: 0.05 });
+          frameLoadedAvatar();
+          const debugSummary = summarizeAvatar();
           speakBtn.disabled = false;
           setStatus(
-            "Loaded. If the avatar looks broken or throws blendshape warnings, our GLB is not fully TalkingHead-compatible."
+            `Loaded.\n${debugSummary}\n${morphSummary}\n\nIf the avatar looks broken or throws blendshape warnings, our GLB is not fully TalkingHead-compatible.`
           );
         } catch (error) {
           console.error(error);

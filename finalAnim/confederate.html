@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Confederate Control</title>
+    <style>
+      :root {
+        --bg: #f3f4f6;
+        --surface: #ffffff;
+        --border: #d7dde5;
+        --text: #111827;
+        --muted: #556274;
+        --primary: #1f4f8a;
+        --danger: #a84c45;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+      main {
+        width: min(920px, 100%);
+        margin: 0 auto;
+        padding: 24px;
+      }
+      header {
+        margin-bottom: 18px;
+      }
+      h1 {
+        margin: 0 0 0.35rem;
+        font-size: 1.45rem;
+      }
+      p {
+        margin: 0;
+        color: var(--muted);
+      }
+      #pending {
+        display: grid;
+        gap: 14px;
+      }
+      .card {
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        background: var(--surface);
+        padding: 16px;
+        box-shadow: 0 8px 24px rgba(15, 23, 42, 0.06);
+      }
+      .meta {
+        margin-bottom: 0.65rem;
+        color: var(--muted);
+        font-size: 0.84rem;
+      }
+      .message {
+        margin-bottom: 0.9rem;
+        line-height: 1.45;
+      }
+      textarea {
+        width: 100%;
+        min-height: 92px;
+        resize: vertical;
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 0.75rem;
+        font: inherit;
+      }
+      .choice-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.65rem;
+        margin: 0.75rem 0;
+      }
+      label {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.35rem;
+        color: var(--muted);
+        font-weight: 700;
+      }
+      button {
+        border: 0;
+        border-radius: 10px;
+        background: var(--primary);
+        color: #fff;
+        padding: 0.75rem 1rem;
+        font: inherit;
+        font-weight: 800;
+        cursor: pointer;
+      }
+      button:disabled {
+        opacity: 0.45;
+        cursor: not-allowed;
+      }
+      .empty {
+        border: 1px dashed var(--border);
+        border-radius: 12px;
+        padding: 20px;
+        color: var(--muted);
+        text-align: center;
+      }
+      .error {
+        color: var(--danger);
+        margin-top: 0.65rem;
+        min-height: 1.2rem;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>Confederate Control</h1>
+        <p>Use this page for human interactions. Participant messages and choices appear here; your reply is spoken by the avatar after a short processing delay.</p>
+      </header>
+      <section id="pending" aria-live="polite">
+        <div class="empty">Waiting for participant activity...</div>
+      </section>
+    </main>
+    <script>
+      const pendingEl = document.getElementById("pending");
+      let pendingCache = "";
+
+      function itemKey(item) {
+        return `${item.session_id}:${item.id}`;
+      }
+
+      function render(items) {
+        const signature = JSON.stringify(items.map(itemKey));
+        if (signature === pendingCache) return;
+        pendingCache = signature;
+        pendingEl.replaceChildren();
+        if (!items.length) {
+          const empty = document.createElement("div");
+          empty.className = "empty";
+          empty.textContent = "Waiting for participant activity...";
+          pendingEl.appendChild(empty);
+          return;
+        }
+
+        for (const item of items) {
+          const card = document.createElement("article");
+          card.className = "card";
+          const meta = document.createElement("div");
+          meta.className = "meta";
+          meta.textContent = `${item.kind.toUpperCase()} · Participant ${item.session_id}${item.round ? ` · Round ${item.round}` : ""}`;
+
+          const message = document.createElement("div");
+          message.className = "message";
+          message.textContent = item.kind === "choice"
+            ? `Participant chose ${String(item.participant_choice || "").toUpperCase()}. Choose your move and optionally write what the avatar should say.`
+            : item.participant_text;
+
+          const textarea = document.createElement("textarea");
+          textarea.placeholder = item.kind === "choice"
+            ? "Optional spoken response. Leave blank for an automatic round summary."
+            : "Type the response the avatar should speak...";
+
+          const choiceRow = document.createElement("div");
+          choiceRow.className = "choice-row";
+          if (item.kind === "choice") {
+            for (const choice of ["split", "steal"]) {
+              const label = document.createElement("label");
+              const input = document.createElement("input");
+              input.type = "radio";
+              input.name = `choice-${item.id}`;
+              input.value = choice;
+              label.append(input, choice[0].toUpperCase() + choice.slice(1));
+              choiceRow.appendChild(label);
+            }
+          }
+
+          const button = document.createElement("button");
+          button.type = "button";
+          button.textContent = "Send to avatar";
+          const error = document.createElement("div");
+          error.className = "error";
+
+          button.addEventListener("click", async () => {
+            const selected = card.querySelector(`input[name="choice-${item.id}"]:checked`);
+            if (item.kind === "choice" && !selected) {
+              error.textContent = "Choose Split or Steal first.";
+              return;
+            }
+            if (item.kind !== "choice" && !textarea.value.trim()) {
+              error.textContent = "Type a reply first.";
+              textarea.focus();
+              return;
+            }
+            button.disabled = true;
+            error.textContent = "";
+            try {
+              const res = await fetch("/api/confederate/reply", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  session_id: item.session_id,
+                  message_id: item.id,
+                  reply: textarea.value.trim(),
+                  choice: selected ? selected.value : undefined,
+                }),
+              });
+              const data = await res.json().catch(() => ({}));
+              if (!res.ok) throw new Error(data.error || res.statusText || "Submit failed");
+              card.remove();
+              pendingCache = "";
+              poll();
+            } catch (err) {
+              button.disabled = false;
+              error.textContent = String(err.message || err);
+            }
+          });
+
+          card.append(meta, message, choiceRow, textarea, button, error);
+          pendingEl.appendChild(card);
+        }
+      }
+
+      async function poll() {
+        try {
+          const res = await fetch("/api/confederate/pending");
+          const data = await res.json();
+          render(Array.isArray(data.pending) ? data.pending : []);
+        } catch (err) {
+          render([]);
+        }
+      }
+
+      poll();
+      window.setInterval(poll, 1200);
+    </script>
+  </body>
+</html>

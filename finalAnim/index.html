@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Kevin — Voice</title>
+    <title>Avatar Voice</title>
     <link rel="icon" href="data:," />
     <style>
       :root {
@@ -50,7 +50,15 @@
       #app.needs-login #ui {
         display: none;
       }
+      #app.confederate-mode #login-screen,
+      #app.confederate-mode #stage,
+      #app.confederate-mode #ui {
+        display: none;
+      }
       #app:not(.needs-login) #login-screen {
+        display: none;
+      }
+      #app:not(.confederate-mode) #confederate-panel {
         display: none;
       }
       #login-screen {
@@ -99,6 +107,7 @@
         box-shadow: 0 0 0 3px rgba(31, 79, 138, 0.12);
       }
       #participant-submit,
+      #confederate-open,
       #change-participant {
         border: none;
         border-radius: 10px;
@@ -110,6 +119,13 @@
       #participant-submit {
         background: var(--primary);
         color: #fff;
+      }
+      #confederate-open {
+        width: 100%;
+        margin-top: 0.75rem;
+        border: 1px solid var(--border-strong);
+        background: var(--surface);
+        color: var(--text);
       }
       #participant-error {
         min-height: 1.1rem;
@@ -277,6 +293,59 @@
         grid-template-columns: repeat(2, minmax(0, 1fr));
         gap: 0.75rem;
       }
+      #session-panel {
+        width: min(720px, 100%);
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 0.6rem;
+      }
+      .metric {
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        background: var(--surface);
+        padding: 0.65rem 0.75rem;
+        box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+      }
+      .metric-label {
+        color: var(--text-muted);
+        font-size: 0.72rem;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+      }
+      .metric-value {
+        margin-top: 0.22rem;
+        color: var(--text);
+        font-size: 1rem;
+        font-weight: 800;
+      }
+      .confederate-route-actions {
+        width: min(720px, 100%);
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 0.55rem;
+        margin: 0.15rem 0 0.75rem;
+      }
+      .route-choice {
+        border: 1px solid var(--border-strong);
+        border-radius: 12px;
+        background: var(--surface);
+        color: var(--text);
+        min-width: 0;
+        padding: 0.65rem 0.55rem;
+        font: inherit;
+        font-size: 0.9rem;
+        font-weight: 700;
+        cursor: pointer;
+        white-space: normal;
+        overflow-wrap: anywhere;
+        line-height: 1.2;
+      }
+      .route-choice.active {
+        border-color: var(--primary);
+        background: var(--surface-muted);
+        color: var(--primary);
+      }
       #avatar-actions {
         width: 100%;
         display: grid;
@@ -328,6 +397,164 @@
         opacity: 0.45;
         cursor: not-allowed;
       }
+      #confederate-panel {
+        width: min(960px, 100%);
+        display: grid;
+        gap: 1rem;
+      }
+      .confederate-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        gap: 1rem;
+      }
+      .confederate-header h1 {
+        margin: 0 0 0.35rem;
+        font-size: 1.35rem;
+      }
+      .confederate-header p {
+        margin: 0;
+        color: var(--text-muted);
+        line-height: 1.45;
+      }
+      .confederate-actions {
+        display: flex;
+        gap: 0.55rem;
+      }
+      .confederate-actions button,
+      .confederate-session,
+      .confederate-submit {
+        border: 1px solid var(--border-strong);
+        border-radius: 10px;
+        background: var(--surface);
+        color: var(--text);
+        padding: 0.65rem 0.8rem;
+        font: inherit;
+        font-weight: 800;
+        cursor: pointer;
+        white-space: normal;
+        overflow-wrap: anywhere;
+        line-height: 1.2;
+      }
+      .confederate-submit {
+        border: 0;
+        background: var(--primary);
+        color: #fff;
+      }
+      #confederate-workspace {
+        display: grid;
+        grid-template-columns: minmax(220px, 0.75fr) minmax(0, 1.25fr);
+        gap: 1rem;
+      }
+      #confederate-session-list,
+      #confederate-chat {
+        min-height: 360px;
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        background: var(--surface);
+        padding: 0.9rem;
+        box-shadow: 0 8px 24px rgba(15, 23, 42, 0.06);
+      }
+      #confederate-session-list {
+        display: grid;
+        align-content: start;
+        gap: 0.6rem;
+      }
+      .confederate-session {
+        width: 100%;
+        text-align: left;
+        min-width: 0;
+      }
+      .confederate-session.active {
+        border-color: var(--primary);
+        color: var(--primary);
+        background: var(--surface-muted);
+      }
+      .confederate-session-meta {
+        display: block;
+        margin-top: 0.25rem;
+        color: var(--text-muted);
+        font-size: 0.78rem;
+        font-weight: 600;
+      }
+      #confederate-chat {
+        display: grid;
+        align-content: start;
+        gap: 0.75rem;
+      }
+      .confederate-empty {
+        color: var(--text-muted);
+        text-align: center;
+        padding: 2rem 1rem;
+        border: 1px dashed var(--border);
+        border-radius: 10px;
+      }
+      .confederate-card {
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 0.85rem;
+        background: var(--surface-muted);
+      }
+      .confederate-event {
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 0.75rem;
+        background: var(--surface);
+        line-height: 1.45;
+        overflow-wrap: anywhere;
+        word-break: break-word;
+      }
+      .confederate-event-meta {
+        margin-bottom: 0.35rem;
+        color: var(--text-muted);
+        font-size: 0.76rem;
+        font-weight: 800;
+        text-transform: uppercase;
+      }
+      .confederate-event-line + .confederate-event-line {
+        margin-top: 0.35rem;
+      }
+      .confederate-meta {
+        margin-bottom: 0.45rem;
+        color: var(--text-muted);
+        font-size: 0.8rem;
+        font-weight: 700;
+      }
+      .confederate-message {
+        margin-bottom: 0.75rem;
+        line-height: 1.45;
+        overflow-wrap: anywhere;
+        word-break: break-word;
+      }
+      .confederate-choice-row {
+        display: flex;
+        gap: 0.75rem;
+        margin: 0 0 0.7rem;
+      }
+      .confederate-choice-row label {
+        color: var(--text-muted);
+        font-weight: 800;
+      }
+      .confederate-card textarea {
+        width: 100%;
+        min-height: 88px;
+        resize: vertical;
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 0.75rem;
+        font: inherit;
+      }
+      .confederate-error {
+        min-height: 1.1rem;
+        margin-top: 0.45rem;
+        color: var(--danger);
+        font-size: 0.84rem;
+      }
+      #confederate-typing {
+        color: var(--text-muted);
+        font-size: 0.86rem;
+        line-height: 1.45;
+      }
       @media (max-width: 760px) {
         #app {
           padding: 14px;
@@ -341,6 +568,17 @@
         }
         #send {
           width: 100%;
+        }
+        #session-panel,
+        .confederate-route-actions {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+        .confederate-header,
+        .confederate-actions {
+          flex-direction: column;
+        }
+        #confederate-workspace {
+          grid-template-columns: 1fr;
         }
       }
     </style>
@@ -379,6 +617,7 @@
           <button type="submit" id="participant-submit">Continue</button>
           <div id="participant-error" role="alert" aria-live="polite"></div>
         </form>
+        <button type="button" id="confederate-open">Confederate Control</button>
       </section>
       <div id="stage">
         <canvas id="viewport"></canvas>
@@ -386,13 +625,32 @@
       <div id="ui">
         <div id="participant-bar">
           <span id="participant-label">Participant ID: --</span>
+          <span id="mode-label">Session active</span>
           <button type="button" id="change-participant">Change ID</button>
+        </div>
+        <div id="session-panel" aria-label="Round and pot counters">
+          <div class="metric">
+            <div class="metric-label">Round</div>
+            <div class="metric-value"><span id="round-current">1</span>/<span id="round-total">7</span></div>
+          </div>
+          <div class="metric">
+            <div class="metric-label">Pot</div>
+            <div class="metric-value">$<span id="round-pot">100</span></div>
+          </div>
+          <div class="metric">
+            <div class="metric-label">Bank</div>
+            <div class="metric-value">$<span id="bank-total">0</span></div>
+          </div>
+          <div class="metric">
+            <div class="metric-label">Phase</div>
+            <div class="metric-value" id="round-phase">Ready</div>
+          </div>
         </div>
         <form id="chat-form">
           <textarea
             id="chat-input"
             rows="2"
-            placeholder="Type a message to Kevin"
+            placeholder="Type a message to the avatar"
             autocomplete="off"
           ></textarea>
           <button type="submit" id="send" disabled>Send</button>
@@ -409,7 +667,27 @@
         </div>
         <div id="voice-note">Type a message or tap Speak once to keep the conversation running. Tap Stop speaking to end voice mode.</div>
       </div>
+      <section id="confederate-panel" aria-label="Confederate control">
+        <div class="confederate-header">
+          <div>
+            <h1>Confederate Control</h1>
+            <p>Pick a participant ID, watch their live human-mode activity, and send responses that the avatar will speak.</p>
+          </div>
+          <div class="confederate-actions">
+            <button type="button" id="confederate-refresh">Refresh</button>
+            <button type="button" id="confederate-back">Back</button>
+          </div>
+        </div>
+        <div id="confederate-workspace">
+          <div id="confederate-session-list" aria-live="polite">
+            <div class="confederate-empty">Waiting for participant sessions...</div>
+          </div>
+          <div id="confederate-chat" aria-live="polite">
+            <div class="confederate-empty">Choose a participant ID to enter that chat.</div>
+          </div>
+        </div>
+      </section>
     </div>
-    <script type="module" src="/main.js?v=20260601-avatar-setup"></script>
+    <script type="module" src="/main.js?v=20260620-all-mode-monitor-v4"></script>
   </body>
 </html>

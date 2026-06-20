@@ -30,7 +30,7 @@ fi
 if [ ! -f "$ROOT_DIR/.env" ]; then
   cp "$ROOT_DIR/.env.example" "$ROOT_DIR/.env"
   echo "Created .env from .env.example"
-  echo "Add your OpenAI and Deepgram API keys to enable replies."
+  echo "Add your OpenAI and Azure Speech API keys to enable replies."
 fi
 
 PORT="${WEB_APP_PORT:-}"

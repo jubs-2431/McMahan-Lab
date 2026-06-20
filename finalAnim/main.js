@@ -3,8 +3,8 @@ import { DRACOLoader } from "three/addons/loaders/DRACOLoader.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 
 const AVATARS = {
-  male: { label: "Male", url: "/kevin.glb" },
-  female: { label: "Female", url: "/female.glb" },
+  male: { label: "Male", url: "/kevin_talkinghead.glb" },
+  female: { label: "Female", url: "/female_talkinghead.glb" },
 };
 const MODEL_Y_OFFSET = 0;
 const FACIAL_TRACK_EXCLUDE_PATTERN = /(head|neck|jaw|tongue|teeth|eye(?!brow)|upperjaw|tearline|eyeocclusion)/;
@@ -14,17 +14,17 @@ const BLINK_DURATION = 0.16;
 const BLINK_WINK_AMOUNT = 0.08;
 const SHIRT_MESH_NAME = "Basic_T_shirts";
 const BODY_MESH_NAME = "CC_Base_Body";
-const LIP_SYNC_ATTACK = 48;
-const LIP_SYNC_RELEASE = 28;
+const LIP_SYNC_ATTACK = 9;
+const LIP_SYNC_RELEASE = 7;
 const LIP_SYNC_GATE = 0.01;
 const JAW_SMOOTH_ATTACK = 34;
 const JAW_SMOOTH_RELEASE = 22;
 const JAW_TARGET_GATE = 0.02;
-const LIP_SYNC_MESH_INCLUDE_PATTERN = /^(ccbasebody|ccbaseteeth|ccbasetongue)$/;
+const LIP_SYNC_MESH_INCLUDE_PATTERN = /ccbasebody|ccbaseteeth|ccbasetongue/;
 const LIP_SYNC_EXCLUDE_PATTERN = /(blink|brow|tongue|eye|squint|cheek|nostril|smile|frown|close|press|pucker|purse|funnel|stretch|narrow|roll|tight|suck)/;
 const LIP_SYNC_OPEN_PATTERN = /(jawopen|mouthopen|openjaw|openmouth|vopen|vlipopen)/;
 const LIP_SYNC_VOWEL_PATTERN = /(visemeaa|visemeah|visemeao|visemeoh|visemeou|phonemeaa|phonemeah|phonemeao|phonemeoh|phonemeou|vwide|vtighto)/;
-const BUILD_ID = "20260527-finalanim-amplitude-sync";
+const BUILD_ID = "20260603-amplitude-analyser-8005";
 const PARTICIPANT_ID_PATTERN = /^[A-Za-z0-9_-]{3,40}$/;
 
 const appEl = document.getElementById("app");
@@ -39,13 +39,32 @@ const chatInput = document.getElementById("chat-input");
 const sendBtn = document.getElementById("send");
 const gameChoiceBtns = Array.from(document.querySelectorAll(".game-choice"));
 const avatarChoiceBtns = Array.from(document.querySelectorAll(".avatar-choice"));
+const modeChoiceBtns = Array.from(document.querySelectorAll(".mode-choice"));
+const confederateOpenBtn = document.getElementById("confederate-open");
 const participantForm = document.getElementById("participant-form");
 const participantInput = document.getElementById("participant-id");
 const participantError = document.getElementById("participant-error");
 const participantLabel = document.getElementById("participant-label");
+const modeLabel = document.getElementById("mode-label");
 const changeParticipantBtn = document.getElementById("change-participant");
+const roundCurrentEl = document.getElementById("round-current");
+const roundTotalEl = document.getElementById("round-total");
+const roundPotEl = document.getElementById("round-pot");
+const bankTotalEl = document.getElementById("bank-total");
+const roundPhaseEl = document.getElementById("round-phase");
+const confederatePanel = document.getElementById("confederate-panel");
+const confederateSessionList = document.getElementById("confederate-session-list");
+const confederateChat = document.getElementById("confederate-chat");
+const confederateRefreshBtn = document.getElementById("confederate-refresh");
+const confederateBackBtn = document.getElementById("confederate-back");
 const HISTORY_STORAGE_KEY = "finalanim_dialogue_history";
 const AVATAR_STORAGE_KEY = "finalanim_avatar_choice";
+const INTERACTION_MODE_STORAGE_KEY = "finalanim_interaction_mode";
+const GAME_TOTAL_ROUNDS = 7;
+const GAME_ROUND_POT = 100;
+const HUMAN_POLL_INTERVAL_MS = 900;
+const HUMAN_POLL_TIMEOUT_MS = 180000;
+const CONFEDERATE_POLL_INTERVAL_MS = 1200;
 
 function getViewportSize() {
   const width = Math.max(stageEl?.clientWidth || window.innerWidth, 1);
@@ -120,7 +139,7 @@ let jawInitialQuaternion = null;
 const jawOpenAxis = new THREE.Vector3(1, 0, 0);
 let jawOpenSign = -1;
 const jawDeltaQuat = new THREE.Quaternion();
-const jawMaxAngle = 0.3;
+const jawMaxAngle = 0.28;
 let jawSmoothedInfluence = 0;
 
 function setStatus(msg) {
@@ -172,10 +191,16 @@ function renderDialogueHistory() {
     item.className = "history-item";
 
     if (entry.type === "split-steal") {
-      item.textContent = `Split/Steal: You chose ${entry.userChoice}; Kevin chose ${entry.assistantChoice}. ${entry.outcomeText}`;
+      item.textContent = `Split/Steal: You chose ${entry.userChoice}; Assistant chose ${entry.assistantChoice}. ${entry.outcomeText}`;
       const reply = document.createElement("div");
       reply.className = "history-meta";
-      reply.textContent = `Kevin: ${entry.reply}`;
+      reply.textContent = `Assistant: ${entry.reply}`;
+      item.appendChild(reply);
+    } else if (entry.type === "human-choice") {
+      item.textContent = `Split/Steal: You chose ${entry.userChoice}; Opponent chose ${entry.confederateChoice}. ${entry.outcomeText}`;
+      const reply = document.createElement("div");
+      reply.className = "history-meta";
+      reply.textContent = `Opponent: ${entry.reply}`;
       item.appendChild(reply);
     } else {
       item.textContent = `${entry.role}: ${entry.text}`;
@@ -198,9 +223,458 @@ function getOutcomeText(outcome) {
   return {
     tie: "It is a tie.",
     user_wins: "You won.",
-    assistant_wins: "Kevin won.",
+    assistant_wins: "Assistant won.",
     no_one_wins: "No one wins.",
+    "both-split": "You both split the pot.",
+    "player-steals": "You stole the full pot.",
+    "confederate-steals": "Your opponent stole the full pot.",
+    "both-steal": "Both chose steal. No payout.",
   }[outcome] || "Round complete.";
+}
+
+function getInitialInteractionMode() {
+  const params = new URLSearchParams(window.location.search);
+  const requested = params.get("mode") || window.localStorage.getItem(INTERACTION_MODE_STORAGE_KEY);
+  return ["ai", "human", "unknown", "confederate"].includes(requested) ? requested : "ai";
+}
+
+function persistInteractionMode(mode) {
+  try {
+    window.localStorage.setItem(INTERACTION_MODE_STORAGE_KEY, mode);
+  } catch (error) {
+    console.warn("Could not persist interaction mode:", error);
+  }
+}
+
+function getModeDisplay(mode = currentInteractionMode) {
+  return {
+    ai: "AI",
+    human: "Human",
+    unknown: "Unknown",
+    confederate: "Confederate",
+  }[mode] || "AI";
+}
+
+function updateModeButtonsState() {
+  modeChoiceBtns.forEach((button) => {
+    const mode = button.dataset.mode || "";
+    button.classList.toggle("active", mode === currentInteractionMode);
+  });
+  if (modeLabel) modeLabel.textContent = "Session active";
+}
+
+function setInteractionMode(mode) {
+  if (!["ai", "human", "unknown", "confederate"].includes(mode)) return;
+  currentInteractionMode = mode;
+  persistInteractionMode(mode);
+  updateModeButtonsState();
+  if (mode === "confederate") {
+    enterConfederateMode();
+    return;
+  }
+  updateGamePanel();
+  if (participantActive) {
+    setStatus(mode === "human"
+      ? "Session ready."
+      : mode === "unknown"
+        ? "Session ready."
+        : "Session ready.");
+  }
+}
+
+function normalizeRouteMode(mode) {
+  return ["ai", "human", "unknown"].includes(mode) ? mode : "ai";
+}
+
+async function getAssignedInteractionMode() {
+  if (!conversationSessionId) return "ai";
+  try {
+    const res = await fetch(`/api/session-mode/${encodeURIComponent(conversationSessionId)}`);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || res.statusText || "Could not read session mode");
+    currentInteractionMode = normalizeRouteMode(data.mode);
+    updateModeButtonsState();
+    return currentInteractionMode;
+  } catch (error) {
+    console.warn("Could not load assigned interaction mode:", error);
+    return "ai";
+  }
+}
+
+async function registerParticipantSession() {
+  if (!conversationSessionId) return;
+  try {
+    const res = await fetch("/api/session-register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        session_id: conversationSessionId,
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || res.statusText || "Could not register session");
+    currentInteractionMode = normalizeRouteMode(data.mode);
+    updateModeButtonsState();
+  } catch (error) {
+    console.warn("Could not register participant session:", error);
+  }
+}
+
+function enterConfederateMode() {
+  if (voiceModeEnabled) setVoiceModeEnabled(false);
+  participantActive = false;
+  requestInFlight = false;
+  appEl?.classList.remove("needs-login");
+  appEl?.classList.add("confederate-mode");
+  setTranscript("");
+  startConfederatePolling();
+}
+
+function exitConfederateMode() {
+  stopConfederatePolling();
+  confederateSelectedSessionId = "";
+  appEl?.classList.remove("confederate-mode");
+  appEl?.classList.add("needs-login");
+  setInteractionMode("ai");
+  window.setTimeout(() => participantInput?.focus(), 0);
+}
+
+function renderConfederateSessions() {
+  if (!confederateSessionList) return;
+  confederateSessionList.replaceChildren();
+
+  if (confederateSessions.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "confederate-empty";
+    empty.textContent = "Waiting for participant sessions...";
+    confederateSessionList.appendChild(empty);
+    return;
+  }
+
+  confederateSessions.forEach((session) => {
+    const sessionId = String(session.session_id || "");
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "confederate-session";
+    button.classList.toggle("active", sessionId === confederateSelectedSessionId);
+    button.textContent = `Participant ${sessionId}`;
+
+    const meta = document.createElement("span");
+    meta.className = "confederate-session-meta";
+    const pendingCount = Number(session.pending_count || 0);
+    const round = Number(session.round || 1);
+    const totalRounds = Number(session.total_rounds || GAME_TOTAL_ROUNDS);
+    const typingText = String(session.typing_text || "").trim();
+    meta.textContent = `${getModeDisplay(normalizeRouteMode(session.mode))} · ${pendingCount} pending · Round ${Math.min(round, totalRounds)}/${totalRounds}${typingText ? " · typing" : ""}`;
+    button.appendChild(meta);
+
+    button.addEventListener("click", () => {
+      confederateSelectedSessionId = sessionId;
+      confederateChatSignature = "";
+      renderConfederateSessions();
+      renderConfederateChat();
+    });
+
+    confederateSessionList.appendChild(button);
+  });
+}
+
+function renderConfederateCard(item) {
+  const draftKey = `${item.session_id}:${item.id}`;
+  const card = document.createElement("article");
+  card.className = "confederate-card";
+
+  const meta = document.createElement("div");
+  meta.className = "confederate-meta";
+  meta.textContent = `${String(item.kind || "").toUpperCase()}${item.round ? ` · Round ${item.round}` : ""}`;
+
+  const message = document.createElement("div");
+  message.className = "confederate-message";
+  message.textContent = item.kind === "choice"
+    ? `Participant chose ${String(item.participant_choice || "").toUpperCase()}. Pick your move and optionally write what the avatar should say.`
+    : String(item.participant_text || "");
+
+  const choiceRow = document.createElement("div");
+  choiceRow.className = "confederate-choice-row";
+  if (item.kind === "choice") {
+    ["split", "steal"].forEach((choice) => {
+      const label = document.createElement("label");
+      const input = document.createElement("input");
+      input.type = "radio";
+      input.name = `confederate-choice-${item.id}`;
+      input.value = choice;
+      label.append(input, choice[0].toUpperCase() + choice.slice(1));
+      choiceRow.appendChild(label);
+    });
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.placeholder = item.kind === "choice"
+    ? "Optional spoken response. Leave blank for automatic round summary."
+    : "Type the response the avatar should speak...";
+  textarea.value = confederateDrafts.get(draftKey) || "";
+  textarea.addEventListener("input", () => {
+    confederateDrafts.set(draftKey, textarea.value);
+  });
+
+  const submit = document.createElement("button");
+  submit.type = "button";
+  submit.className = "confederate-submit";
+  submit.textContent = "Send to avatar";
+
+  const error = document.createElement("div");
+  error.className = "confederate-error";
+
+  submit.addEventListener("click", async () => {
+    const selected = card.querySelector(`input[name="confederate-choice-${item.id}"]:checked`);
+    if (item.kind === "choice" && !selected) {
+      error.textContent = "Choose Split or Steal first.";
+      return;
+    }
+    if (item.kind !== "choice" && !textarea.value.trim()) {
+      error.textContent = "Type a reply first.";
+      textarea.focus();
+      return;
+    }
+    submit.disabled = true;
+    error.textContent = "";
+    try {
+      const res = await fetch("/api/confederate/reply", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          session_id: item.session_id,
+          message_id: item.id,
+          reply: textarea.value.trim(),
+          choice: selected ? selected.value : undefined,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || res.statusText || "Submit failed");
+      confederateDrafts.delete(draftKey);
+      confederateChatSignature = "";
+      await fetchConfederateSessions();
+    } catch (err) {
+      submit.disabled = false;
+      error.textContent = String(err.message || err);
+    }
+  });
+
+  card.append(meta, message, choiceRow, textarea, submit, error);
+  return card;
+}
+
+function eventTimestamp(event) {
+  return event.timestamp || event.created_at || event.answered_at || "";
+}
+
+function renderConfederateEvent(event) {
+  const item = document.createElement("div");
+  item.className = "confederate-event";
+
+  const meta = document.createElement("div");
+  meta.className = "confederate-event-meta";
+  meta.textContent = String(event.type || "event").replaceAll("_", " ");
+  item.appendChild(meta);
+
+  const addLine = (label, text) => {
+    const value = String(text || "").trim();
+    if (!value) return;
+    const line = document.createElement("div");
+    line.className = "confederate-event-line";
+    line.textContent = `${label}: ${value}`;
+    item.appendChild(line);
+  };
+
+  if (event.type === "chat_turn") {
+    addLine("Participant", event.participant_text);
+    addLine("Avatar", event.avatar_text);
+  } else if (event.type === "participant_message") {
+    addLine("Participant", event.participant_text);
+  } else if (event.type === "human_message_resolved") {
+    addLine("Avatar", event.reply);
+  } else if (event.type === "participant_choice") {
+    addLine("Participant", event.participant_text || `Chose ${event.participant_choice || ""}`);
+  } else if (event.type === "human_choice_resolved") {
+    addLine("Round", event.round ? String(event.round) : "");
+    addLine("Choices", `Participant ${event.participant_choice || "unknown"}; avatar ${event.confederate_choice || "unknown"}`);
+    addLine("Outcome", event.outcome);
+    addLine("Avatar", event.reply);
+  } else if (event.type === "session_mode_set") {
+    addLine("Route", getModeDisplay(normalizeRouteMode(event.mode)));
+  } else if (event.type === "participant_login") {
+    addLine("Status", "Participant signed in");
+  } else {
+    addLine("Detail", event.participant_text || event.reply || event.mode || event.outcome || "");
+  }
+
+  return item;
+}
+
+function renderConfederateChat() {
+  if (!confederateChat) return;
+
+  if (!confederateSelectedSessionId) {
+    const signature = "no-selected-session";
+    if (signature === confederateChatSignature) return;
+    confederateChatSignature = signature;
+    confederateChat.replaceChildren();
+    const empty = document.createElement("div");
+    empty.className = "confederate-empty";
+    empty.textContent = "Choose a participant ID to enter that chat.";
+    confederateChat.appendChild(empty);
+    return;
+  }
+
+  const session = confederateSessions.find((item) => String(item.session_id || "") === confederateSelectedSessionId);
+  if (!session) {
+    const signature = `missing:${confederateSelectedSessionId}`;
+    if (signature === confederateChatSignature) return;
+    confederateChatSignature = signature;
+    confederateChat.replaceChildren();
+    const empty = document.createElement("div");
+    empty.className = "confederate-empty";
+    empty.textContent = "That participant session is no longer active.";
+    confederateChat.appendChild(empty);
+    return;
+  }
+
+  const pending = Array.isArray(session.pending) ? session.pending : [];
+  const recentEvents = Array.isArray(session.recent_events) ? session.recent_events : [];
+  const signature = JSON.stringify({
+    session_id: confederateSelectedSessionId,
+    mode: normalizeRouteMode(session.mode),
+    bank: Number(session.bank || 0),
+    round: Number(session.round || 1),
+    total_rounds: Number(session.total_rounds || GAME_TOTAL_ROUNDS),
+    pending: pending.map((item) => ({
+      id: item.id,
+      kind: item.kind,
+      round: item.round || null,
+      text: item.participant_text || "",
+      choice: item.participant_choice || "",
+    })),
+    recent_events: recentEvents.map((event) => ({
+      type: event.type || "",
+      timestamp: eventTimestamp(event),
+      participant_text: event.participant_text || "",
+      participant_choice: event.participant_choice || "",
+      avatar_text: event.avatar_text || "",
+      reply: event.reply || "",
+      mode: event.mode || "",
+      outcome: event.outcome || "",
+      round: event.round || null,
+    })),
+  });
+  if (signature === confederateChatSignature) return;
+  confederateChatSignature = signature;
+  confederateChat.replaceChildren();
+
+  const header = document.createElement("div");
+  header.className = "confederate-meta";
+  header.textContent = `Participant ${confederateSelectedSessionId} · Bank $${Number(session.bank || 0)} · Route ${getModeDisplay(normalizeRouteMode(session.mode))}`;
+  confederateChat.appendChild(header);
+
+  const routeActions = document.createElement("div");
+  routeActions.className = "confederate-route-actions";
+  [
+    ["human", "Human"],
+    ["ai", "AI"],
+    ["unknown", "Unknown"],
+  ].forEach(([mode, label]) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "route-choice";
+    button.classList.toggle("active", normalizeRouteMode(session.mode) === mode);
+    button.textContent = label;
+    button.addEventListener("click", () => setConfederateSessionMode(confederateSelectedSessionId, mode));
+    routeActions.appendChild(button);
+  });
+  confederateChat.appendChild(routeActions);
+
+  const typingText = String(session.typing_text || "").trim();
+  if (typingText) {
+    const typing = document.createElement("div");
+    typing.id = "confederate-typing";
+    typing.textContent = `Typing now: ${typingText}`;
+    confederateChat.appendChild(typing);
+  }
+
+  const visibleEvents = recentEvents.filter((event) => !["human_message_pending", "human_choice_pending"].includes(event.type));
+  if (visibleEvents.length > 0) {
+    visibleEvents.slice(-12).forEach((event) => {
+      confederateChat.appendChild(renderConfederateEvent(event));
+    });
+  }
+
+  if (pending.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "confederate-empty";
+    empty.textContent = visibleEvents.length > 0
+      ? "No pending response needed right now."
+      : "No participant activity yet.";
+    confederateChat.appendChild(empty);
+    return;
+  }
+
+  pending.forEach((item) => confederateChat.appendChild(renderConfederateCard(item)));
+}
+
+async function setConfederateSessionMode(sessionId, mode) {
+  if (!sessionId) return;
+  try {
+    const res = await fetch("/api/confederate/session-mode", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session_id: sessionId, mode }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || res.statusText || "Could not set mode");
+    confederateChatSignature = "";
+    await fetchConfederateSessions();
+  } catch (error) {
+    console.warn("Could not set confederate session mode:", error);
+  }
+}
+
+async function fetchConfederateSessions() {
+  if (!confederatePanel || !appEl?.classList.contains("confederate-mode")) return;
+  try {
+    const res = await fetch("/api/confederate/sessions");
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || res.statusText || "Confederate poll failed");
+    confederateSessions = Array.isArray(data.sessions) ? data.sessions : [];
+    if (
+      confederateSelectedSessionId &&
+      !confederateSessions.some((item) => String(item.session_id || "") === confederateSelectedSessionId)
+    ) {
+      confederateSelectedSessionId = "";
+    }
+    renderConfederateSessions();
+    renderConfederateChat();
+  } catch (error) {
+    console.warn("Could not load confederate sessions:", error);
+  }
+}
+
+function startConfederatePolling() {
+  stopConfederatePolling();
+  fetchConfederateSessions();
+  confederatePollTimer = window.setInterval(fetchConfederateSessions, CONFEDERATE_POLL_INTERVAL_MS);
+}
+
+function stopConfederatePolling() {
+  if (!confederatePollTimer) return;
+  window.clearInterval(confederatePollTimer);
+  confederatePollTimer = null;
+}
+
+function updateGamePanel() {
+  if (roundCurrentEl) roundCurrentEl.textContent = String(Math.min(gameRound, GAME_TOTAL_ROUNDS));
+  if (roundTotalEl) roundTotalEl.textContent = String(GAME_TOTAL_ROUNDS);
+  if (roundPotEl) roundPotEl.textContent = String(GAME_ROUND_POT);
+  if (bankTotalEl) bankTotalEl.textContent = String(gameBank);
+  if (roundPhaseEl) roundPhaseEl.textContent = gameComplete ? "Complete" : gamePhase;
 }
 
 function getInitialAvatarKey() {
@@ -241,12 +715,20 @@ function setParticipantError(message) {
 function setParticipantActive(sessionId) {
   conversationSessionId = sessionId;
   participantActive = true;
+  currentInteractionMode = "ai";
+  gameRound = 1;
+  gameBank = 0;
+  gameComplete = false;
+  gamePhase = "Ready";
   dialogueHistory = loadDialogueHistory(sessionId);
   appEl?.classList.remove("needs-login");
   if (participantLabel) participantLabel.textContent = `Participant ID: ${sessionId}`;
   setParticipantError("");
   renderDialogueHistory();
-  setStatus(avatarReady ? "Tap Speak to start continuous voice mode." : "Loading avatar...");
+  updateModeButtonsState();
+  updateGamePanel();
+  registerParticipantSession().then(() => getAssignedInteractionMode());
+  setStatus(avatarReady ? "Session ready." : "Loading avatar...");
   updateSpeakButtonState();
   updateSendButtonState();
   window.setTimeout(() => chatInput?.focus(), 0);
@@ -257,11 +739,17 @@ function resetParticipant() {
   conversationSessionId = null;
   participantActive = false;
   dialogueHistory = [];
+  gameRound = 1;
+  gameBank = 0;
+  gameComplete = false;
+  gamePhase = "Ready";
   appEl?.classList.add("needs-login");
   if (participantLabel) participantLabel.textContent = "Participant ID: --";
   if (participantInput) participantInput.value = "";
   setTranscript("");
   renderDialogueHistory();
+  updateModeButtonsState();
+  updateGamePanel();
   updateSpeakButtonState();
   updateSendButtonState();
   window.setTimeout(() => participantInput?.focus(), 0);
@@ -326,28 +814,28 @@ function detectLipSyncTargets(model) {
     Object.keys(child.morphTargetDictionary).forEach((key) => {
       const normalizedKey = normalizeNodeName(key);
 
-      if (normalizedKey === "vopen") {
-        registerPart(key, talkingOpenParts, 0.52);
-      } else if (normalizedKey === "vlipopen") {
-        registerPart(key, talkingOpenParts, 0.32);
+      if (normalizedKey === "vopen" || normalizedKey === "visemeaa" || normalizedKey === "mouthopen") {
+        registerPart(key, talkingOpenParts, 1.0);
+      } else if (normalizedKey === "vlipopen" || normalizedKey === "visemee") {
+        registerPart(key, talkingOpenParts, 0.75);
       } else if (normalizedKey === "jawopen" || normalizedKey === "jawdown") {
-        registerPart(key, talkingOpenParts, 0.17);
+        registerPart(key, talkingOpenParts, 0.75);
       } else if (normalizedKey === "mouthdroplower") {
-        registerPart(key, talkingOpenParts, 0.14);
+        registerPart(key, talkingOpenParts, 0.65);
       } else if (normalizedKey === "mouthdropupper") {
-        registerPart(key, talkingOpenParts, 0.06);
-      } else if (normalizedKey === "vwide") {
-        registerPart(key, talkingWideParts, 0.1);
-      } else if (normalizedKey === "vtighto" || normalizedKey === "vtight") {
-        registerPart(key, talkingRoundParts, normalizedKey === "vtighto" ? 0.13 : 0.08);
-      } else if (normalizedKey === "vdentallip" || normalizedKey === "vaffricate") {
+        registerPart(key, talkingOpenParts, 0.40);
+      } else if (normalizedKey === "vwide" || normalizedKey === "visemess" || normalizedKey === "visemei") {
+        registerPart(key, talkingWideParts, 0.85);
+      } else if (normalizedKey === "vtighto" || normalizedKey === "vtight" || normalizedKey === "visemeo" || normalizedKey === "visemeu") {
+        registerPart(key, talkingRoundParts, 0.90);
+      } else if (normalizedKey === "vdentallip" || normalizedKey === "vaffricate" || normalizedKey === "visemeff" || normalizedKey === "visemeth" || normalizedKey === "visemedd") {
         registerPart(
           key,
           talkingConsonantParts,
-          normalizedKey === "vdentallip" ? 0.11 : 0.09
+          0.85
         );
-      } else if (normalizedKey === "mouthclose" || normalizedKey === "mouthcontract") {
-        registerPart(key, talkingCloseParts, normalizedKey === "mouthclose" ? 0.1 : 0.05);
+      } else if (normalizedKey === "mouthclose" || normalizedKey === "mouthcontract" || normalizedKey === "visemesil" || normalizedKey === "visemepp") {
+        registerPart(key, talkingCloseParts, 0.85);
       } else if (
         normalizedKey === "tongueup" ||
         normalizedKey === "tonguetipup" ||
@@ -355,20 +843,20 @@ function detectLipSyncTargets(model) {
         normalizedKey === "vtongueraise" ||
         normalizedKey === "vtongueup"
       ) {
-        registerPart(key, tongueRaiseParts, 0.08);
+        registerPart(key, tongueRaiseParts, 0.18);
       } else if (
         normalizedKey === "tongueout" ||
         normalizedKey === "tongueextend" ||
         normalizedKey === "vtongueout"
       ) {
-        registerPart(key, tongueOutParts, 0.065);
+        registerPart(key, tongueOutParts, 0.12);
       } else if (
         normalizedKey === "tongueroll" ||
         normalizedKey === "vtonguecurlu" ||
         normalizedKey === "vtonguecurld" ||
         normalizedKey === "tonguenarrow"
       ) {
-        registerPart(key, tongueCurlParts, 0.05);
+        registerPart(key, tongueCurlParts, 0.1);
       }
     });
   });
@@ -382,7 +870,7 @@ function detectLipSyncTargets(model) {
 
   if (jawBone && talkingOpenParts.length > 0) {
     for (const part of talkingOpenParts) {
-      part.weight *= 0.68;
+      part.weight *= 0.95;
     }
   }
 
@@ -500,9 +988,8 @@ function calibrateJawMotion(model) {
 
 function setLipSyncInfluence(influence, delta = 1 / 60) {
   const clamped = THREE.MathUtils.clamp(influence, 0, 1);
-  const active = Math.pow(THREE.MathUtils.clamp(speechState.activity, 0, 1), 1.08);
-  const openInfluence =
-    Math.pow(clamped, 1.02) * (1.02 - speechState.close * 0.11) * (0.44 + active * 0.56);
+  const active = Math.pow(THREE.MathUtils.clamp(speechState.activity, 0, 1), 0.85);
+  const openInfluence = Math.pow(clamped, 0.82) * (0.62 + active * 0.38);
 
   const applyCollection = (parts, amount) => {
     for (const part of parts) {
@@ -516,20 +1003,20 @@ function setLipSyncInfluence(influence, delta = 1 / 60) {
   };
 
   applyCollection(talkingOpenParts, openInfluence);
-  applyCollection(talkingWideParts, speechState.wide * active * 0.5);
-  applyCollection(talkingRoundParts, speechState.round * active * 0.54);
-  applyCollection(talkingConsonantParts, speechState.consonant * active * 0.62);
-  applyCollection(talkingCloseParts, speechState.close * active * 0.78);
+  applyCollection(talkingWideParts, speechState.wide * active * 0.85);
+  applyCollection(talkingRoundParts, speechState.round * active * 0.95);
+  applyCollection(talkingConsonantParts, speechState.consonant * active * 0.90);
+  applyCollection(talkingCloseParts, speechState.close * active * 0.85);
   const tongueActive = active * THREE.MathUtils.smoothstep(clamped, 0.025, 0.34);
   const tongueRaise =
-    Math.max(speechState.consonant * 1.05, speechState.wide * 0.3 + speechState.round * 0.18) *
+    Math.max(speechState.consonant * 0.8, speechState.wide * 0.22 + speechState.round * 0.16) *
     tongueActive;
   const tongueOut =
-    (speechState.consonant * 0.95 + speechState.close * 0.24) *
+    (speechState.consonant * 0.52 + speechState.close * 0.16) *
     tongueActive *
     (0.55 + clamped * 0.45);
   const tongueCurl =
-    (speechState.round * 0.62 + speechState.consonant * 0.26) *
+    (speechState.round * 0.46 + speechState.consonant * 0.16) *
     tongueActive *
     0.9;
   applyCollection(tongueRaiseParts, tongueRaise);
@@ -705,18 +1192,18 @@ function findFirstObject(root, names) {
 function buildPoseRig(root) {
   return {
     head: findFirstObject(root, ["CC_Base_Head", "mixamorig:Head", "Head"]),
-    neckUpper: findFirstObject(root, ["CC_Base_NeckTwist02", "mixamorig:Neck", "Neck"]),
-    neckLower: findFirstObject(root, ["CC_Base_NeckTwist01", "Neck1"]),
+    neckUpper: findFirstObject(root, ["CC_Base_NeckTwist02", "mixamorig:Neck", "Neck", "Neck1"]),
+    neckLower: findFirstObject(root, ["CC_Base_NeckTwist01", "Neck1", "Neck"]),
     spineUpper: findFirstObject(root, ["CC_Base_Spine02", "mixamorig:Spine2", "Spine2"]),
     spineLower: findFirstObject(root, ["CC_Base_Spine01", "mixamorig:Spine1", "Spine1"]),
-    clavicleL: findFirstObject(root, ["CC_Base_L_Clavicle", "mixamorig:LeftShoulder"]),
-    clavicleR: findFirstObject(root, ["CC_Base_R_Clavicle", "mixamorig:RightShoulder"]),
-    upperArmL: findFirstObject(root, ["CC_Base_L_Upperarm", "mixamorig:LeftArm"]),
-    upperArmR: findFirstObject(root, ["CC_Base_R_Upperarm", "mixamorig:RightArm"]),
-    forearmL: findFirstObject(root, ["CC_Base_L_Forearm", "mixamorig:LeftForeArm"]),
-    forearmR: findFirstObject(root, ["CC_Base_R_Forearm", "mixamorig:RightForeArm"]),
-    handL: findFirstObject(root, ["CC_Base_L_Hand", "mixamorig:LeftHand"]),
-    handR: findFirstObject(root, ["CC_Base_R_Hand", "mixamorig:RightHand"]),
+    clavicleL: findFirstObject(root, ["CC_Base_L_Clavicle", "mixamorig:LeftShoulder", "LeftShoulder"]),
+    clavicleR: findFirstObject(root, ["CC_Base_R_Clavicle", "mixamorig:RightShoulder", "RightShoulder"]),
+    upperArmL: findFirstObject(root, ["CC_Base_L_Upperarm", "mixamorig:LeftArm", "LeftArm"]),
+    upperArmR: findFirstObject(root, ["CC_Base_R_Upperarm", "mixamorig:RightArm", "RightArm"]),
+    forearmL: findFirstObject(root, ["CC_Base_L_Forearm", "mixamorig:LeftForeArm", "LeftForeArm"]),
+    forearmR: findFirstObject(root, ["CC_Base_R_Forearm", "mixamorig:RightForeArm", "RightForeArm"]),
+    handL: findFirstObject(root, ["CC_Base_L_Hand", "mixamorig:LeftHand", "LeftHand"]),
+    handR: findFirstObject(root, ["CC_Base_R_Hand", "mixamorig:RightHand", "RightHand"]),
     eyeL: findFirstObject(root, ["CC_Base_L_Eye", "mixamorig:LeftEye", "LeftEye"]),
     eyeR: findFirstObject(root, ["CC_Base_R_Eye", "mixamorig:RightEye", "RightEye"]),
   };
@@ -1200,8 +1687,8 @@ function ensureAudioGraph() {
   if (!audioCtx) {
     audioCtx = new AudioContext();
     analyser = audioCtx.createAnalyser();
-    analyser.fftSize = 64;
-    analyser.smoothingTimeConstant = 0.08;
+    analyser.fftSize = 32;
+    analyser.smoothingTimeConstant = 0.16;
     freqData = new Uint8Array(analyser.frequencyBinCount);
   }
   if (audioCtx.state === "suspended") {
@@ -1217,6 +1704,13 @@ function rmsFromAnalyser() {
   return n > 0 ? sum / n / 255 : 0;
 }
 
+function getAnalyserLoudness() {
+  if (!analyser || !freqData) return 0;
+  // Same math as THREE.AudioAnalyser.getAverageFrequency(), mapped like the pasted example.
+  const averageFrequency = rmsFromAnalyser() * 255;
+  return THREE.MathUtils.clamp(THREE.MathUtils.mapLinear(averageFrequency, 0, 80, 0, 1), 0, 1);
+}
+
 function getBandAverage(startRatio, endRatio) {
   if (!freqData || freqData.length === 0) return 0;
   const start = Math.max(0, Math.floor(freqData.length * startRatio));
@@ -1226,60 +1720,129 @@ function getBandAverage(startRatio, endRatio) {
   return sum / Math.max(1, end - start) / 255;
 }
 
+const AUDIO_LATENCY_OFFSET = 0.08; // 80ms latency offset to match Web Audio output
+
 function getRhubarbCueAt(time) {
   if (!rhubarbMouthCues.length) return null;
-  while (
-    rhubarbCueIndex < rhubarbMouthCues.length - 1 &&
-    time >= Number(rhubarbMouthCues[rhubarbCueIndex].end || 0)
-  ) {
-    rhubarbCueIndex += 1;
+  const lookupTime = Math.max(0, time - AUDIO_LATENCY_OFFSET);
+  for (let i = 0; i < rhubarbMouthCues.length; i++) {
+    const cue = rhubarbMouthCues[i];
+    const start = Number(cue.start || 0);
+    const end = Number(cue.end || start);
+    if (lookupTime >= start && lookupTime <= end) {
+      return cue;
+    }
   }
-  const cue = rhubarbMouthCues[rhubarbCueIndex];
-  const start = Number(cue?.start || 0);
-  const end = Number(cue?.end || start);
-  return time >= start && time <= end + 0.035 ? cue : null;
+  return null;
 }
 
 function getRhubarbShapeTarget(shape) {
   switch (String(shape || "X").toUpperCase()) {
     case "A":
-      return { mouth: 0.06, activity: 0.55, close: 0.5 };
+      return { mouth: 0.05, activity: 0.46, close: 0.92, consonant: 0.24 };
     case "B":
-      return { mouth: 0.22, activity: 0.9, consonant: 0.58, close: 0.22 };
+      return { mouth: 0.28, activity: 0.9, consonant: 0.84, close: 0.34 };
     case "C":
-      return { mouth: 0.55, activity: 0.98 };
+      return { mouth: 0.75, activity: 0.98, wide: 0.24 };
     case "D":
-      return { mouth: 0.78, activity: 1 };
+      return { mouth: 0.95, activity: 1, wide: 0.16 };
     case "E":
-      return { mouth: 0.43, activity: 0.98, round: 0.58 };
+      return { mouth: 0.55, activity: 0.98, round: 0.68 };
     case "F":
-      return { mouth: 0.34, activity: 0.98, round: 0.84 };
+      return { mouth: 0.40, activity: 0.98, round: 0.96, close: 0.12 };
     case "G":
-      return { mouth: 0.2, activity: 0.92, consonant: 0.72, close: 0.18 };
+      return { mouth: 0.25, activity: 0.92, consonant: 0.82, close: 0.28 };
     case "H":
-      return { mouth: 0.56, activity: 1, consonant: 0.48, tongue: 0.9 };
+      return { mouth: 0.65, activity: 1, consonant: 0.62, tongue: 0.7 };
     case "X":
     default:
       return { mouth: 0, activity: 0, close: 0 };
   }
 }
 
+function getAzureShapeTarget(id) {
+  switch (Number(id)) {
+    case 0: // silence
+    case 12: // p, b, m
+      return { mouth: 0, activity: 0, close: 1 };
+    case 1: // ax, ah, ae
+    case 2: // aa
+    case 11: // ay
+      return { mouth: 0.88, activity: 0.95, wide: 0.3 };
+    case 3: // ao
+    case 8: // ow
+    case 9: // aw
+    case 10: // oy
+      return { mouth: 0.95, activity: 0.98, round: 0.75 };
+    case 4: // ey, eh, uh
+    case 5: // er
+      return { mouth: 0.60, activity: 0.95, wide: 0.45 };
+    case 6: // iy, ih, y
+      return { mouth: 0.35, activity: 0.98, wide: 0.85, consonant: 0.45 };
+    case 7: // uw, u, w
+      return { mouth: 0.22, activity: 0.9, round: 0.95 };
+    case 13: // f, v
+      return { mouth: 0.12, activity: 0.85, consonant: 0.95, close: 0.25 };
+    case 14: // th, dh
+    case 17: // t, d
+    case 19: // n
+    case 20: // l
+      return { mouth: 0.20, activity: 0.85, consonant: 0.85, wide: 0.25 };
+    case 15: // s, z
+    case 16: // sh, ch, jh, zh
+    case 18: // k, g
+    case 21: // r
+      return { mouth: 0.28, activity: 0.95, consonant: 0.75, wide: 0.45 };
+    default:
+      return { mouth: 0, activity: 0, close: 0 };
+  }
+}
+
+function getVisemeShapeTarget(value) {
+  if (value === undefined || value === null) {
+    return { mouth: 0, activity: 0, close: 0 };
+  }
+  const num = Number(value);
+  if (!isNaN(num) && String(value).trim() !== "") {
+    return getAzureShapeTarget(num);
+  }
+  return getRhubarbShapeTarget(value);
+}
+
 function computeRhubarbLipSyncTarget(delta) {
   if (!currentReplyAudio || !rhubarbMouthCues.length) return null;
 
   const cue = getRhubarbCueAt(currentReplyAudio.currentTime || 0);
-  const targetState = getRhubarbShapeTarget(cue?.value || "X");
-  const mouthTarget = targetState.mouth || 0;
-  const activityTarget = targetState.activity || 0;
-  const response = mouthTarget > mouthSmoothed ? LIP_SYNC_ATTACK * 1.25 : LIP_SYNC_RELEASE * 1.35;
+  const targetState = getVisemeShapeTarget(cue?.value);
+  const loudness = getAnalyserLoudness();
+
+  const isSilentValue =
+    !cue?.value ||
+    String(cue.value).toUpperCase() === "X" ||
+    cue.value === 0 ||
+    cue.value === 12 ||
+    String(cue.value) === "0" ||
+    String(cue.value) === "12";
+
+  const energyScale = !isSilentValue
+    ? THREE.MathUtils.clamp(0.75 + loudness * 0.35, 0.70, 1.10)
+    : THREE.MathUtils.clamp(loudness * 0.32, 0, 0.3);
+
+  const mouthTarget = THREE.MathUtils.clamp((targetState.mouth || 0) * energyScale, 0, 0.95);
+  const activityTarget = THREE.MathUtils.clamp(
+    Math.max(targetState.activity || 0, loudness * 0.85),
+    0,
+    1
+  );
+  const response = mouthTarget > mouthSmoothed ? LIP_SYNC_ATTACK * 1.05 : LIP_SYNC_RELEASE * 1.2;
 
   mouthSmoothed += (mouthTarget - mouthSmoothed) * Math.min(1, delta * response);
-  speechState.activity += (activityTarget - speechState.activity) * Math.min(1, delta * 20);
-  speechState.wide += (0 - speechState.wide) * Math.min(1, delta * 16);
-  speechState.round += ((targetState.round || 0) - speechState.round) * Math.min(1, delta * 20);
+  speechState.activity += (activityTarget - speechState.activity) * Math.min(1, delta * 15);
+  speechState.wide += ((targetState.wide || 0) - speechState.wide) * Math.min(1, delta * 12);
+  speechState.round += ((targetState.round || 0) - speechState.round) * Math.min(1, delta * 15);
   speechState.consonant +=
-    ((targetState.consonant || 0) - speechState.consonant) * Math.min(1, delta * 22);
-  speechState.close += ((targetState.close || 0) - speechState.close) * Math.min(1, delta * 22);
+    ((targetState.consonant || 0) - speechState.consonant) * Math.min(1, delta * 16);
+  speechState.close += ((targetState.close || 0) - speechState.close) * Math.min(1, delta * 16);
 
   if (targetState.tongue) {
     speechState.consonant = Math.max(speechState.consonant, targetState.tongue);
@@ -1300,77 +1863,27 @@ function computeLipSyncTarget(delta) {
     return mouthSmoothed;
   }
 
-  const avgFreqNorm = rmsFromAnalyser();
-  const freqEnergy = THREE.MathUtils.clamp((avgFreqNorm - 0.045) * 1.95, 0, 1);
-  const lowBand = getBandAverage(0, 0.18);
-  const midBand = getBandAverage(0.18, 0.5);
-  const highBand = getBandAverage(0.5, 1);
-
-  let rmsEnergy = 0;
-  if (analyser && analyser.frequencyBinCount && audioCtx) {
-    const timeData = new Uint8Array(analyser.fftSize);
-    analyser.getByteTimeDomainData(timeData);
-    let sumSquares = 0;
-    for (let i = 0; i < timeData.length; i += 1) {
-      const centered = (timeData[i] - 128) / 128;
-      sumSquares += centered * centered;
-    }
-    const rms = Math.sqrt(sumSquares / timeData.length);
-    rmsEnergy = THREE.MathUtils.clamp((rms - 0.014) * 26, 0, 1);
-  }
-
-  const loudness = Math.max(rmsEnergy, freqEnergy * 0.42);
-  const activityTarget = THREE.MathUtils.clamp(loudness * 1.25, 0, 1);
-  speechState.activity += (activityTarget - speechState.activity) * Math.min(1, delta * 13);
-  const consonantDip = THREE.MathUtils.clamp((0.085 - rmsEnergy) * 3.2, 0, 0.28);
-  let target = THREE.MathUtils.clamp((loudness - 0.035) * 1.05, 0, 0.58);
-  let pulse = 0;
-  let microClosure = 0;
-
-  if (target > 0.06) {
-    lipClosePulsePhase += delta * (8 + rmsEnergy * 7);
-    pulse = Math.pow(Math.max(0, Math.sin(lipClosePulsePhase)), 4) * 0.06;
-    microClosure =
-      (0.006 + Math.max(0, midBand - lowBand) * 0.012) *
-      (0.45 + 0.55 * (0.5 + 0.5 * Math.sin(lipClosePulsePhase * 0.43 + 0.9)));
-    target = Math.max(0, target - pulse);
-  }
-
-  target = Math.max(0, target - microClosure - consonantDip * 0.05);
-  target = THREE.MathUtils.clamp(target, 0, 0.58);
+  const averageFrequency = getAnalyserLoudness();
+  let target = THREE.MathUtils.mapLinear(averageFrequency, 0, 1, 0, 0.70);
+  target = THREE.MathUtils.clamp(target, 0, 0.70);
   if (target < LIP_SYNC_GATE) target = 0;
 
-  const wideTarget =
-    THREE.MathUtils.clamp((highBand - lowBand * 0.42) * 1.05 + target * 0.06, 0, 0.14) *
-    THREE.MathUtils.smoothstep(target, 0.1, 0.5);
-  const roundTarget =
-    THREE.MathUtils.clamp((lowBand - highBand * 0.5) * 0.95 + target * 0.05, 0, 0.12) *
-    THREE.MathUtils.smoothstep(target, 0.08, 0.48);
-  const consonantTarget =
-    THREE.MathUtils.clamp((highBand - target * 0.42) * 0.5 + consonantDip * 0.08, 0, 0.1) *
-    (1 - THREE.MathUtils.smoothstep(target, 0.3, 0.72));
-  const closeTarget = THREE.MathUtils.clamp(
-    pulse * 0.4 + consonantDip * 0.08 + microClosure * 0.45,
-    0,
-    0.1
-  );
+  const smoothing = target > mouthSmoothed ? 0.34 : 0.16;
+  mouthSmoothed = THREE.MathUtils.lerp(mouthSmoothed, target, smoothing);
 
-  speechState.wide += (wideTarget - speechState.wide) * Math.min(1, delta * 24);
-  speechState.round += (roundTarget - speechState.round) * Math.min(1, delta * 24);
-  speechState.consonant += (consonantTarget - speechState.consonant) * Math.min(1, delta * 30);
-  speechState.close += (closeTarget - speechState.close) * Math.min(1, delta * 34);
+  const lowBand = getBandAverage(0, 0.22);
+  const highBand = getBandAverage(0.45, 1);
+  const activityTarget = THREE.MathUtils.clamp(target * 1.35, 0, 1);
+  const wideTarget = THREE.MathUtils.clamp(highBand * 0.18 + target * 0.08, 0, 0.22);
+  const roundTarget = THREE.MathUtils.clamp(lowBand * 0.2 + target * 0.04, 0, 0.22);
+  const consonantTarget = THREE.MathUtils.clamp(highBand * 0.14, 0, 0.18);
 
-  const response =
-    target > mouthSmoothed
-      ? LIP_SYNC_ATTACK
-      : target === 0
-        ? LIP_SYNC_RELEASE * 1.9
-        : LIP_SYNC_RELEASE * 1.2;
-  const previousMouth = mouthSmoothed;
-  mouthSmoothed += (target - mouthSmoothed) * Math.min(1, delta * response);
-  if (target > previousMouth) {
-    mouthSmoothed = Math.max(mouthSmoothed, target * 0.78);
-  }
+  speechState.activity += (activityTarget - speechState.activity) * Math.min(1, delta * 16);
+  speechState.wide += (wideTarget - speechState.wide) * Math.min(1, delta * 12);
+  speechState.round += (roundTarget - speechState.round) * Math.min(1, delta * 12);
+  speechState.consonant += (consonantTarget - speechState.consonant) * Math.min(1, delta * 14);
+  speechState.close += (0 - speechState.close) * Math.min(1, delta * 18);
+
   return mouthSmoothed;
 }
 
@@ -1385,6 +1898,18 @@ let participantActive = false;
 let conversationSessionId = null;
 let dialogueHistory = [];
 let currentAvatarKey = getInitialAvatarKey();
+let currentInteractionMode = getInitialInteractionMode();
+let gameRound = 1;
+let gameBank = 0;
+let gameComplete = false;
+let gamePhase = "Ready";
+let confederatePollTimer = null;
+let confederateSessions = [];
+let confederateSelectedSessionId = "";
+let confederateChatSignature = "";
+const confederateDrafts = new Map();
+let humanTypingTimer = null;
+let lastHumanTypingText = "";
 
 function updatePose(delta) {
   if (!poseRig) return;
@@ -1458,13 +1983,13 @@ function updatePose(delta) {
       poseRig.upperArmL,
       0.2 + breath * 0.04,
       -0.12 + lookYaw * 0.03,
-      -1.02
+      -0.68
     );
     applyLocalEulerOffset(
       poseRig.upperArmR,
       0.2 + breath * 0.04,
       0.12 + lookYaw * 0.03,
-      1.02
+      0.68
     );
     applyLocalEulerOffset(poseRig.forearmL, -0.14, 0.02, -0.12);
     applyLocalEulerOffset(poseRig.forearmR, -0.14, -0.02, 0.12);
@@ -1479,10 +2004,18 @@ function tick() {
   mixer?.update(delta);
 
   if (lipDrivenByAudio && analyser && hasLipSyncTargets()) {
-    mouthSmoothed = computeLipSyncTarget(delta);
+    if (rhubarbMouthCues.length > 0) {
+      mouthSmoothed = computeRhubarbLipSyncTarget(delta);
+    } else {
+      mouthSmoothed = computeLipSyncTarget(delta);
+    }
     setLipSyncInfluence(mouthSmoothed, delta);
   } else if (!lipDrivenByAudio && mouthSmoothed > 0.002) {
-    mouthSmoothed = computeLipSyncTarget(delta);
+    if (rhubarbMouthCues.length > 0) {
+      mouthSmoothed = computeRhubarbLipSyncTarget(delta);
+    } else {
+      mouthSmoothed = computeLipSyncTarget(delta);
+    }
     setLipSyncInfluence(mouthSmoothed, delta);
   } else if (!lipDrivenByAudio && mouthSmoothed <= 0.002) {
     setLipSyncInfluence(0, delta);
@@ -1515,7 +2048,7 @@ function updateSendButtonState() {
   if (!sendBtn || !chatInput) return;
   sendBtn.disabled = !avatarReady || !participantActive || requestInFlight || !chatInput.value.trim();
   gameChoiceBtns.forEach((button) => {
-    button.disabled = !avatarReady || !participantActive || requestInFlight;
+    button.disabled = !avatarReady || !participantActive || requestInFlight || gameComplete;
   });
   updateAvatarButtonsState();
 }
@@ -1596,6 +2129,106 @@ async function playReplyAudio(base64, mime, mouthCues = []) {
   });
 }
 
+function delay(ms) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function queueHumanTypingUpdate(text) {
+  if (!participantActive || !conversationSessionId) return;
+  const nextText = String(text || "").slice(0, 500);
+  if (nextText === lastHumanTypingText) return;
+  lastHumanTypingText = nextText;
+  if (humanTypingTimer) window.clearTimeout(humanTypingTimer);
+  humanTypingTimer = window.setTimeout(async () => {
+    try {
+      await fetch("/api/human-typing", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          session_id: conversationSessionId,
+          text: lastHumanTypingText,
+        }),
+      });
+    } catch (error) {
+      console.warn("Could not send typing update:", error);
+    }
+  }, 180);
+}
+
+async function waitForHumanResult(messageId) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < HUMAN_POLL_TIMEOUT_MS) {
+    const res = await fetch(`/api/human-result/${encodeURIComponent(conversationSessionId)}/${encodeURIComponent(messageId)}`);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(data.error || res.statusText || "Human interaction failed");
+    }
+    if (data.status === "ready") {
+      return data;
+    }
+    await delay(HUMAN_POLL_INTERVAL_MS);
+  }
+  throw new Error("The response took too long. Please try again.");
+}
+
+async function sendHumanTranscript(text) {
+  const cleanedText = (text || "").trim();
+  if (!cleanedText || requestInFlight || !participantActive || !conversationSessionId) return;
+
+  if (recognitionListening) {
+    stopVoiceRecognition();
+  }
+
+  setTranscript(cleanedText);
+  setStatus("Processing your message...");
+  gamePhase = "Waiting";
+  updateGamePanel();
+  requestInFlight = true;
+  updateSpeakButtonState();
+  updateSendButtonState();
+
+  try {
+    addDialogueEntry({ type: "message", role: "You", text: cleanedText });
+    const res = await fetch("/api/human-message", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        text: cleanedText,
+        session_id: conversationSessionId || undefined,
+        avatar: currentAvatarKey,
+      }),
+    });
+    const queued = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(queued.error || res.statusText || "Request failed");
+    }
+    if (typeof queued.session_id === "string" && queued.session_id.trim()) {
+      persistSessionId(queued.session_id.trim());
+    }
+
+    setStatus("Preparing response...");
+    const data = await waitForHumanResult(queued.message_id);
+    addDialogueEntry({ type: "message", role: "Opponent", text: data.reply || "" });
+    setStatus(data.reply || "");
+    if (data.audio_base64) {
+      await playReplyAudio(data.audio_base64, data.audio_mime, data.mouth_cues);
+    }
+    gamePhase = "Ready";
+    updateGamePanel();
+  } catch (e) {
+    setStatus(String(e.message || e));
+    gamePhase = "Ready";
+    updateGamePanel();
+  } finally {
+    requestInFlight = false;
+    updateSpeakButtonState();
+    updateSendButtonState();
+    if (voiceModeEnabled && !lipDrivenByAudio) {
+      scheduleListeningRestart(420);
+    }
+  }
+}
+
 async function sendTranscript(text) {
   const cleanedText = (text || "").trim();
   if (!cleanedText || requestInFlight || !participantActive || !conversationSessionId) return;
@@ -1617,6 +2250,7 @@ async function sendTranscript(text) {
       body: JSON.stringify({
         text: cleanedText,
         session_id: conversationSessionId || undefined,
+        avatar: currentAvatarKey,
       }),
     });
     const data = await res.json().catch(() => ({}));
@@ -1630,7 +2264,7 @@ async function sendTranscript(text) {
 
     setStatus(data.reply || "");
     addDialogueEntry({ type: "message", role: "You", text: cleanedText });
-    addDialogueEntry({ type: "message", role: "Kevin", text: data.reply || "" });
+    addDialogueEntry({ type: "message", role: "Assistant", text: data.reply || "" });
     if (data.audio_base64) {
       await playReplyAudio(data.audio_base64, data.audio_mime, data.mouth_cues);
       if (!voiceModeEnabled) {
@@ -1658,7 +2292,7 @@ async function sendSplitStealChoice(choice) {
   }
 
   setTranscript(`I choose ${normalizedChoice}.`);
-  setStatus("Kevin is choosing split or steal...");
+  setStatus("Assistant is choosing split or steal...");
   requestInFlight = true;
   updateSpeakButtonState();
   updateSendButtonState();
@@ -1670,6 +2304,7 @@ async function sendSplitStealChoice(choice) {
       body: JSON.stringify({
         choice: normalizedChoice,
         session_id: conversationSessionId || undefined,
+        avatar: currentAvatarKey,
       }),
     });
     const data = await res.json().catch(() => ({}));
@@ -1708,6 +2343,92 @@ async function sendSplitStealChoice(choice) {
   }
 }
 
+async function sendHumanSplitStealChoice(choice) {
+  const normalizedChoice = (choice || "").trim().toLowerCase();
+  if (!["split", "steal"].includes(normalizedChoice) || requestInFlight || !participantActive || !conversationSessionId || gameComplete) return;
+
+  if (recognitionListening) {
+    stopVoiceRecognition();
+  }
+
+  setTranscript(`I choose ${normalizedChoice}.`);
+  setStatus(`Round ${gameRound}: choice locked. Processing...`);
+  gamePhase = "Waiting";
+  updateGamePanel();
+  requestInFlight = true;
+  updateSpeakButtonState();
+  updateSendButtonState();
+
+  try {
+    const res = await fetch("/api/human-split-steal", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        choice: normalizedChoice,
+        session_id: conversationSessionId || undefined,
+        avatar: currentAvatarKey,
+      }),
+    });
+    const queued = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(queued.error || res.statusText || "Request failed");
+    }
+
+    setStatus("Processing round...");
+    const data = await waitForHumanResult(queued.message_id);
+    gameBank = Number(data.bank || gameBank);
+    gameComplete = !!data.complete;
+    gameRound = gameComplete ? GAME_TOTAL_ROUNDS : Math.min(GAME_TOTAL_ROUNDS, Number(data.round || gameRound) + 1);
+    gamePhase = gameComplete ? "Complete" : "Ready";
+    updateGamePanel();
+
+    addDialogueEntry({
+      type: "human-choice",
+      userChoice: data.participant_choice || normalizedChoice,
+      confederateChoice: data.confederate_choice || "unknown",
+      outcome: data.outcome || "",
+      outcomeText: getOutcomeText(data.outcome),
+      reply: data.reply || "",
+    });
+
+    setStatus(data.complete ? `Session complete. Total bank: $${gameBank}.` : data.reply || "Round complete.");
+    if (data.audio_base64) {
+      await playReplyAudio(data.audio_base64, data.audio_mime, data.mouth_cues);
+      if (!data.complete) {
+        setStatus(`Round ${gameRound} ready. Pot is $${GAME_ROUND_POT}.`);
+      }
+    }
+  } catch (e) {
+    setStatus(String(e.message || e));
+    gamePhase = "Ready";
+    updateGamePanel();
+  } finally {
+    requestInFlight = false;
+    updateSpeakButtonState();
+    updateSendButtonState();
+    if (voiceModeEnabled && !lipDrivenByAudio) {
+      scheduleListeningRestart(420);
+    }
+  }
+}
+
+async function sendRoutedTranscript(text) {
+  const mode = await getAssignedInteractionMode();
+  if (mode === "human") {
+    queueHumanTypingUpdate("");
+    return sendHumanTranscript(text);
+  }
+  return sendTranscript(text);
+}
+
+async function sendRoutedSplitStealChoice(choice) {
+  const mode = await getAssignedInteractionMode();
+  if (mode === "human") {
+    return sendHumanSplitStealChoice(choice);
+  }
+  return sendSplitStealChoice(choice);
+}
+
 let recognition = null;
 function initVoiceRecognition() {
   if (!SpeechRecognition || recognition) return;
@@ -1740,7 +2461,7 @@ function initVoiceRecognition() {
     if (preview) setTranscript(preview);
     const finalQuestion = finalTranscript.trim();
     if (!finalQuestion) return;
-    sendTranscript(finalQuestion);
+    sendRoutedTranscript(finalQuestion);
     try {
       recognition.stop();
     } catch (_) {}
@@ -1823,6 +2544,10 @@ speakBtn.addEventListener("click", () => {
 
 participantForm?.addEventListener("submit", (event) => {
   event.preventDefault();
+  if (currentInteractionMode === "confederate") {
+    enterConfederateMode();
+    return;
+  }
   const participantId = normalizeParticipantId(participantInput?.value || "");
   if (!PARTICIPANT_ID_PATTERN.test(participantId)) {
     setParticipantError("Use the assigned ID only: letters, numbers, dash, or underscore.");
@@ -1838,6 +2563,7 @@ changeParticipantBtn?.addEventListener("click", () => {
 
 chatInput?.addEventListener("input", () => {
   updateSendButtonState();
+  queueHumanTypingUpdate(chatInput.value || "");
 });
 
 chatInput?.addEventListener("keydown", (event) => {
@@ -1855,7 +2581,7 @@ chatForm?.addEventListener("submit", (event) => {
   event.preventDefault();
   const value = chatInput?.value || "";
   if (!value.trim()) return;
-  sendTranscript(value);
+  sendRoutedTranscript(value);
   chatInput.value = "";
   updateSendButtonState();
 });
@@ -1863,7 +2589,13 @@ chatForm?.addEventListener("submit", (event) => {
 gameChoiceBtns.forEach((button) => {
   button.addEventListener("click", () => {
     if (button.disabled) return;
-    sendSplitStealChoice(button.dataset.choice || "");
+    sendRoutedSplitStealChoice(button.dataset.choice || "");
+  });
+});
+
+modeChoiceBtns.forEach((button) => {
+  button.addEventListener("click", () => {
+    setInteractionMode(button.dataset.mode || "ai");
   });
 });
 
@@ -1874,10 +2606,28 @@ avatarChoiceBtns.forEach((button) => {
   });
 });
 
+confederateBackBtn?.addEventListener("click", () => {
+  exitConfederateMode();
+});
+
+confederateRefreshBtn?.addEventListener("click", () => {
+  fetchConfederateSessions();
+});
+
+confederateOpenBtn?.addEventListener("click", () => {
+  setInteractionMode("confederate");
+});
+
 updateSendButtonState();
 renderDialogueHistory();
 updateAvatarButtonsState();
-participantInput?.focus();
+updateModeButtonsState();
+updateGamePanel();
+if (currentInteractionMode === "confederate") {
+  enterConfederateMode();
+} else {
+  participantInput?.focus();
+}
 
 initAvatar().catch((error) => {
   console.error(error);
