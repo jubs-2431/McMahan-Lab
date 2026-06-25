@@ -20,11 +20,13 @@ const LIP_SYNC_GATE = 0.01;
 const JAW_SMOOTH_ATTACK = 34;
 const JAW_SMOOTH_RELEASE = 22;
 const JAW_TARGET_GATE = 0.02;
+const JAW_BONE_LIP_SYNC_ENABLED = false;
+const LOWER_TEETH_MAX_DROP = 0.014;
 const LIP_SYNC_MESH_INCLUDE_PATTERN = /ccbasebody|ccbaseteeth|ccbasetongue/;
 const LIP_SYNC_EXCLUDE_PATTERN = /(blink|brow|tongue|eye|squint|cheek|nostril|smile|frown|close|press|pucker|purse|funnel|stretch|narrow|roll|tight|suck)/;
 const LIP_SYNC_OPEN_PATTERN = /(jawopen|mouthopen|openjaw|openmouth|vopen|vlipopen)/;
 const LIP_SYNC_VOWEL_PATTERN = /(visemeaa|visemeah|visemeao|visemeoh|visemeou|phonemeaa|phonemeah|phonemeao|phonemeoh|phonemeou|vwide|vtighto)/;
-const BUILD_ID = "20260603-amplitude-analyser-8005";
+const BUILD_ID = "20260625-lower-teeth-bone-v3";
 const PARTICIPANT_ID_PATTERN = /^[A-Za-z0-9_-]{3,40}$/;
 
 const appEl = document.getElementById("app");
@@ -141,6 +143,9 @@ let jawOpenSign = -1;
 const jawDeltaQuat = new THREE.Quaternion();
 const jawMaxAngle = 0.28;
 let jawSmoothedInfluence = 0;
+let lowerTeethBone = null;
+let lowerTeethInitialPosition = null;
+let lowerTeethSmoothedInfluence = 0;
 
 function setStatus(msg) {
   statusEl.textContent = msg;
@@ -762,7 +767,8 @@ function hasLipSyncTargets() {
     talkingRoundParts.length > 0 ||
     talkingConsonantParts.length > 0 ||
     talkingCloseParts.length > 0 ||
-    !!jawBone
+    !!jawBone ||
+    !!lowerTeethBone
   );
 }
 
@@ -777,6 +783,9 @@ function detectLipSyncTargets(model) {
   tongueCurlParts.length = 0;
   jawBone = null;
   jawInitialQuaternion = null;
+  lowerTeethBone = null;
+  lowerTeethInitialPosition = null;
+  lowerTeethSmoothedInfluence = 0;
   jawOpenAxis.set(1, 0, 0);
   jawOpenSign = -1;
   jawSmoothedInfluence = 0;
@@ -796,8 +805,17 @@ function detectLipSyncTargets(model) {
       if (score > 0) jawCandidates.push({ bone: child, score });
     }
 
+    if (
+      child.isBone &&
+      (normalizedName.includes("teeth02") || normalizedName.includes("lowerteeth"))
+    ) {
+      lowerTeethBone = child;
+      lowerTeethInitialPosition = child.position.clone();
+    }
+
     if (!child.isMesh || !child.morphTargetDictionary || !child.morphTargetInfluences) return;
     if (!LIP_SYNC_MESH_INCLUDE_PATTERN.test(normalizedName)) return;
+    if (normalizedName.includes("teeth")) return;
 
     const registerPart = (key, collection, weight) => {
       const index = child.morphTargetDictionary[key];
@@ -814,16 +832,22 @@ function detectLipSyncTargets(model) {
     Object.keys(child.morphTargetDictionary).forEach((key) => {
       const normalizedKey = normalizeNodeName(key);
 
-      if (normalizedKey === "vopen" || normalizedKey === "visemeaa" || normalizedKey === "mouthopen") {
-        registerPart(key, talkingOpenParts, 1.0);
+      const isMouthInteriorMesh = normalizedName.includes("tongue");
+
+      if (normalizedKey === "vopen") {
+        registerPart(key, talkingOpenParts, isMouthInteriorMesh ? 0.78 : 0.48);
+      } else if (normalizedKey === "visemeaa") {
+        registerPart(key, talkingOpenParts, isMouthInteriorMesh ? 0.46 : 0.22);
+      } else if (normalizedKey === "mouthopen") {
+        registerPart(key, talkingOpenParts, isMouthInteriorMesh ? 0.56 : 0.18);
       } else if (normalizedKey === "vlipopen" || normalizedKey === "visemee") {
-        registerPart(key, talkingOpenParts, 0.75);
+        registerPart(key, talkingOpenParts, isMouthInteriorMesh ? 0.38 : 0.16);
       } else if (normalizedKey === "jawopen" || normalizedKey === "jawdown") {
-        registerPart(key, talkingOpenParts, 0.75);
+        if (isMouthInteriorMesh) registerPart(key, talkingOpenParts, 0.58);
       } else if (normalizedKey === "mouthdroplower") {
-        registerPart(key, talkingOpenParts, 0.65);
+        if (isMouthInteriorMesh) registerPart(key, talkingOpenParts, 0.42);
       } else if (normalizedKey === "mouthdropupper") {
-        registerPart(key, talkingOpenParts, 0.40);
+        if (isMouthInteriorMesh) registerPart(key, talkingOpenParts, 0.18);
       } else if (normalizedKey === "vwide" || normalizedKey === "visemess" || normalizedKey === "visemei") {
         registerPart(key, talkingWideParts, 0.85);
       } else if (normalizedKey === "vtighto" || normalizedKey === "vtight" || normalizedKey === "visemeo" || normalizedKey === "visemeu") {
@@ -868,7 +892,7 @@ function detectLipSyncTargets(model) {
     calibrateJawMotion(model);
   }
 
-  if (jawBone && talkingOpenParts.length > 0) {
+  if (JAW_BONE_LIP_SYNC_ENABLED && jawBone && talkingOpenParts.length > 0) {
     for (const part of talkingOpenParts) {
       part.weight *= 0.95;
     }
@@ -883,7 +907,7 @@ function detectLipSyncTargets(model) {
   const uniqueTongueOutNames = [...new Set(tongueOutParts.map((part) => part.key))];
   const uniqueTongueCurlNames = [...new Set(tongueCurlParts.map((part) => part.key))];
   console.info(
-    `Lip-sync targets: open=${talkingOpenParts.length}, wide=${talkingWideParts.length}, round=${talkingRoundParts.length}, consonant=${talkingConsonantParts.length}, close=${talkingCloseParts.length}, tongueRaise=${tongueRaiseParts.length}, tongueOut=${tongueOutParts.length}, tongueCurl=${tongueCurlParts.length}, jaw=${jawBone ? jawBone.name : "none"}`
+    `Lip-sync targets: open=${talkingOpenParts.length}, wide=${talkingWideParts.length}, round=${talkingRoundParts.length}, consonant=${talkingConsonantParts.length}, close=${talkingCloseParts.length}, tongueRaise=${tongueRaiseParts.length}, tongueOut=${tongueOutParts.length}, tongueCurl=${tongueCurlParts.length}, jaw=${jawBone ? jawBone.name : "none"}${JAW_BONE_LIP_SYNC_ENABLED ? "" : " (disabled)"}, lowerTeeth=${lowerTeethBone ? lowerTeethBone.name : "none"}`
   );
   console.info("Lip-sync open morphs:", uniqueOpenNames.join(", "));
   console.info("Lip-sync wide morphs:", uniqueWideNames.join(", "));
@@ -1023,7 +1047,7 @@ function setLipSyncInfluence(influence, delta = 1 / 60) {
   applyCollection(tongueOutParts, tongueOut);
   applyCollection(tongueCurlParts, tongueCurl);
 
-  if (jawBone && jawInitialQuaternion) {
+  if (JAW_BONE_LIP_SYNC_ENABLED && jawBone && jawInitialQuaternion) {
     const jawTarget =
       clamped <= JAW_TARGET_GATE
         ? 0
@@ -1037,12 +1061,43 @@ function setLipSyncInfluence(influence, delta = 1 / 60) {
     jawBone.quaternion.copy(jawInitialQuaternion).multiply(jawDeltaQuat);
   }
 
+  if (lowerTeethBone && lowerTeethInitialPosition) {
+    const teethTarget = THREE.MathUtils.clamp(
+      openInfluence * 0.95 + speechState.round * active * 0.18,
+      0,
+      1
+    );
+    const response = teethTarget > lowerTeethSmoothedInfluence ? 28 : 18;
+    lowerTeethSmoothedInfluence +=
+      (teethTarget - lowerTeethSmoothedInfluence) * Math.min(1, delta * response);
+  }
+
   trackLipSyncDebug(clamped, openInfluence);
+}
+
+function applyLowerTeethOffset() {
+  if (!lowerTeethBone || !lowerTeethInitialPosition) return;
+
+  lowerTeethBone.position.copy(lowerTeethInitialPosition);
+  if (lowerTeethSmoothedInfluence <= 0.001) return;
+
+  if (!lowerTeethBone.parent) {
+    lowerTeethBone.position.y -= LOWER_TEETH_MAX_DROP * lowerTeethSmoothedInfluence;
+    return;
+  }
+
+  lowerTeethBone.parent.updateWorldMatrix(true, false);
+  tempVecA.copy(lowerTeethBone.position);
+  lowerTeethBone.parent.localToWorld(tempVecA);
+  tempVecA.y -= LOWER_TEETH_MAX_DROP * lowerTeethSmoothedInfluence;
+  lowerTeethBone.parent.worldToLocal(tempVecA);
+  lowerTeethBone.position.copy(tempVecA);
 }
 
 function resetLipSync() {
   mouthSmoothed = 0;
   jawSmoothedInfluence = 0;
+  lowerTeethSmoothedInfluence = 0;
   speechState.activity = 0;
   speechState.wide = 0;
   speechState.round = 0;
@@ -2023,6 +2078,7 @@ function tick() {
 
   updateBlink(delta);
   updatePose(delta);
+  applyLowerTeethOffset();
   renderer.render(scene, camera);
 }
 
