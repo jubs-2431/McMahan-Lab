@@ -21,12 +21,12 @@ const JAW_SMOOTH_ATTACK = 34;
 const JAW_SMOOTH_RELEASE = 22;
 const JAW_TARGET_GATE = 0.02;
 const JAW_BONE_LIP_SYNC_ENABLED = false;
-const LOWER_TEETH_MAX_DROP = 0.014;
+const LOWER_TEETH_MAX_DROP = 0;
 const LIP_SYNC_MESH_INCLUDE_PATTERN = /ccbasebody|ccbaseteeth|ccbasetongue/;
 const LIP_SYNC_EXCLUDE_PATTERN = /(blink|brow|tongue|eye|squint|cheek|nostril|smile|frown|close|press|pucker|purse|funnel|stretch|narrow|roll|tight|suck)/;
 const LIP_SYNC_OPEN_PATTERN = /(jawopen|mouthopen|openjaw|openmouth|vopen|vlipopen)/;
 const LIP_SYNC_VOWEL_PATTERN = /(visemeaa|visemeah|visemeao|visemeoh|visemeou|phonemeaa|phonemeah|phonemeao|phonemeoh|phonemeou|vwide|vtighto)/;
-const BUILD_ID = "20260625-lower-teeth-bone-v3";
+const BUILD_ID = "20260625-blender-teeth-morphs";
 const PARTICIPANT_ID_PATTERN = /^[A-Za-z0-9_-]{3,40}$/;
 
 const appEl = document.getElementById("app");
@@ -815,7 +815,6 @@ function detectLipSyncTargets(model) {
 
     if (!child.isMesh || !child.morphTargetDictionary || !child.morphTargetInfluences) return;
     if (!LIP_SYNC_MESH_INCLUDE_PATTERN.test(normalizedName)) return;
-    if (normalizedName.includes("teeth")) return;
 
     const registerPart = (key, collection, weight) => {
       const index = child.morphTargetDictionary[key];
@@ -832,7 +831,8 @@ function detectLipSyncTargets(model) {
     Object.keys(child.morphTargetDictionary).forEach((key) => {
       const normalizedKey = normalizeNodeName(key);
 
-      const isMouthInteriorMesh = normalizedName.includes("tongue");
+      const isMouthInteriorMesh =
+        normalizedName.includes("teeth") || normalizedName.includes("tongue");
 
       if (normalizedKey === "vopen") {
         registerPart(key, talkingOpenParts, isMouthInteriorMesh ? 0.78 : 0.48);
