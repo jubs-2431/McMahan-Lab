@@ -3,13 +3,13 @@ import { DRACOLoader } from "three/addons/loaders/DRACOLoader.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 
 const AVATARS = {
-  male: { label: "Male", url: "/kevin_talkinghead.glb" },
-  female: { label: "Female", url: "/female_talkinghead.glb" },
+  male: { label: "Male", url: "/avatar-male.glb" },
+  female: { label: "Female", url: "/avatar-female.glb" },
 };
 const MODEL_Y_OFFSET = 0;
 const FACIAL_TRACK_EXCLUDE_PATTERN = /(head|neck|jaw|tongue|teeth|eye(?!brow)|upperjaw|tearline|eyeocclusion)/;
-const BLINK_TARGET_LEFT_PATTERN = /^eyeblinkl$/;
-const BLINK_TARGET_RIGHT_PATTERN = /^eyeblinkr$/;
+const BLINK_TARGET_LEFT_PATTERN = /^(eyeblinkl|eyeblinkleft)$/;
+const BLINK_TARGET_RIGHT_PATTERN = /^(eyeblinkr|eyeblinkright)$/;
 const BLINK_DURATION = 0.16;
 const BLINK_WINK_AMOUNT = 0.08;
 const SHIRT_MESH_NAME = "Basic_T_shirts";
@@ -21,12 +21,12 @@ const JAW_SMOOTH_ATTACK = 34;
 const JAW_SMOOTH_RELEASE = 22;
 const JAW_TARGET_GATE = 0.02;
 const JAW_BONE_LIP_SYNC_ENABLED = false;
-const LOWER_TEETH_MAX_DROP = 0;
-const LIP_SYNC_MESH_INCLUDE_PATTERN = /ccbasebody|ccbaseteeth|ccbasetongue/;
+const LOWER_TEETH_MAX_DROP = 0.014;
+const LIP_SYNC_MESH_INCLUDE_PATTERN = /ccbasebody|ccbaseteeth|ccbasetongue|headmesh|teethmesh|tonguemesh/;
 const LIP_SYNC_EXCLUDE_PATTERN = /(blink|brow|tongue|eye|squint|cheek|nostril|smile|frown|close|press|pucker|purse|funnel|stretch|narrow|roll|tight|suck)/;
 const LIP_SYNC_OPEN_PATTERN = /(jawopen|mouthopen|openjaw|openmouth|vopen|vlipopen)/;
 const LIP_SYNC_VOWEL_PATTERN = /(visemeaa|visemeah|visemeao|visemeoh|visemeou|phonemeaa|phonemeah|phonemeao|phonemeoh|phonemeou|vwide|vtighto)/;
-const BUILD_ID = "20260625-blender-teeth-morphs";
+const BUILD_ID = "20260708-female-professional-viseme-frames";
 const PARTICIPANT_ID_PATTERN = /^[A-Za-z0-9_-]{3,40}$/;
 
 const appEl = document.getElementById("app");
@@ -95,15 +95,15 @@ const camera = new THREE.PerspectiveCamera(
 camera.position.set(0, 1.5, 2.15);
 camera.lookAt(0, 1.4, 0);
 
-const hemi = new THREE.HemisphereLight(0xddeeff, 0x222233, 0.85);
+const hemi = new THREE.HemisphereLight(0xffffff, 0x667085, 1.7);
 scene.add(hemi);
-const key = new THREE.DirectionalLight(0xffffff, 1.15);
-key.position.set(2.5, 6, 4);
+const key = new THREE.DirectionalLight(0xffffff, 2.4);
+key.position.set(2.5, 4.5, 3);
 scene.add(key);
-const fill = new THREE.DirectionalLight(0xaabbff, 0.35);
-fill.position.set(-3, 2, -2);
+const fill = new THREE.DirectionalLight(0xaec4ff, 0.95);
+fill.position.set(-3, 2, 2);
 scene.add(fill);
-const rim = new THREE.DirectionalLight(0xffffff, 0.4);
+const rim = new THREE.DirectionalLight(0xffffff, 0.25);
 rim.position.set(-1, 3, -4);
 scene.add(rim);
 
@@ -134,6 +134,7 @@ const talkingCloseParts = [];
 const tongueRaiseParts = [];
 const tongueOutParts = [];
 const tongueCurlParts = [];
+const teethOpenParts = [];
 let blinkPartsLeft = [];
 let blinkPartsRight = [];
 let jawBone = null;
@@ -146,6 +147,37 @@ let jawSmoothedInfluence = 0;
 let lowerTeethBone = null;
 let lowerTeethInitialPosition = null;
 let lowerTeethSmoothedInfluence = 0;
+const femaleMouthMorphParts = [];
+let activeFemaleVisemeId = 0;
+let femaleVisemeIntensity = 0;
+
+const FEMALE_AVATURN_VISEMES = {
+  0: {},
+  1: { visemee: 0.4, jawopen: 0.1, mouthstretchleft: 0.05, mouthstretchright: 0.05 },
+  2: { visemeaa: 0.64, jawopen: 0.21 },
+  3: { visemeo: 0.52, mouthfunnel: 0.12, jawopen: 0.14 },
+  4: { visemee: 0.48 },
+  5: { visemerr: 0.34, mouthpucker: 0.08 },
+  6: { visemei: 0.42, mouthstretchleft: 0.05, mouthstretchright: 0.05 },
+  7: { visemeu: 0.44, mouthpucker: 0.12 },
+  8: { visemeo: 0.45, mouthfunnel: 0.1 },
+  9: { visemeaa: 0.44, visemeo: 0.26, jawopen: 0.16 },
+  10: { visemeo: 0.34, visemei: 0.18 },
+  11: { visemeaa: 0.45, visemei: 0.22, jawopen: 0.12 },
+  12: { jawopen: 0.08 },
+  13: { visemerr: 0.36, mouthpucker: 0.08 },
+  14: { visemedd: 0.32, jawopen: 0.08 },
+  15: { visemess: 0.4, mouthstretchleft: 0.04, mouthstretchright: 0.04 },
+  16: { visemech: 0.36, mouthpucker: 0.1 },
+  17: { visemeth: 0.36 },
+  18: { visemeff: 0.42 },
+  19: { visemedd: 0.34 },
+  20: { visemekk: 0.34, jawopen: 0.06 },
+  21: { visemepp: 0.56, mouthclose: 0.1 },
+};
+const FEMALE_AVATURN_MOUTH_TARGETS = new Set(
+  Object.values(FEMALE_AVATURN_VISEMES).flatMap((targets) => Object.keys(targets))
+);
 
 function setStatus(msg) {
   statusEl.textContent = msg;
@@ -767,6 +799,8 @@ function hasLipSyncTargets() {
     talkingRoundParts.length > 0 ||
     talkingConsonantParts.length > 0 ||
     talkingCloseParts.length > 0 ||
+    teethOpenParts.length > 0 ||
+    femaleMouthMorphParts.length > 0 ||
     !!jawBone ||
     !!lowerTeethBone
   );
@@ -781,11 +815,15 @@ function detectLipSyncTargets(model) {
   tongueRaiseParts.length = 0;
   tongueOutParts.length = 0;
   tongueCurlParts.length = 0;
+  teethOpenParts.length = 0;
   jawBone = null;
   jawInitialQuaternion = null;
   lowerTeethBone = null;
   lowerTeethInitialPosition = null;
   lowerTeethSmoothedInfluence = 0;
+  femaleMouthMorphParts.length = 0;
+  activeFemaleVisemeId = 0;
+  femaleVisemeIntensity = 0;
   jawOpenAxis.set(1, 0, 0);
   jawOpenSign = -1;
   jawSmoothedInfluence = 0;
@@ -816,6 +854,42 @@ function detectLipSyncTargets(model) {
     if (!child.isMesh || !child.morphTargetDictionary || !child.morphTargetInfluences) return;
     if (!LIP_SYNC_MESH_INCLUDE_PATTERN.test(normalizedName)) return;
 
+    if (currentAvatarKey === "female") {
+      Object.entries(child.morphTargetDictionary).forEach(([key, index]) => {
+        const normalizedKey = normalizeNodeName(key);
+        if (FEMALE_AVATURN_MOUTH_TARGETS.has(normalizedKey)) {
+          femaleMouthMorphParts.push({
+            mesh: child,
+            index,
+            normalizedKey,
+            baseValue: child.morphTargetInfluences[index] ?? 0,
+          });
+        }
+      });
+      return;
+    }
+
+    if (normalizedName.includes("teeth")) {
+      const registerTeethPart = (key, weight) => {
+        const index = child.morphTargetDictionary[key];
+        if (typeof index !== "number") return;
+        teethOpenParts.push({
+          mesh: child,
+          index,
+          key,
+          baseValue: child.morphTargetInfluences[index] ?? 0,
+          weight,
+        });
+      };
+
+      if (Object.prototype.hasOwnProperty.call(child.morphTargetDictionary, "V_Open")) {
+        registerTeethPart("V_Open", 0.22);
+      } else if (Object.prototype.hasOwnProperty.call(child.morphTargetDictionary, "mouthOpen")) {
+        registerTeethPart("mouthOpen", 0.18);
+      }
+      return;
+    }
+
     const registerPart = (key, collection, weight) => {
       const index = child.morphTargetDictionary[key];
       if (typeof index !== "number") return;
@@ -831,8 +905,7 @@ function detectLipSyncTargets(model) {
     Object.keys(child.morphTargetDictionary).forEach((key) => {
       const normalizedKey = normalizeNodeName(key);
 
-      const isMouthInteriorMesh =
-        normalizedName.includes("teeth") || normalizedName.includes("tongue");
+      const isMouthInteriorMesh = normalizedName.includes("tongue");
 
       if (normalizedKey === "vopen") {
         registerPart(key, talkingOpenParts, isMouthInteriorMesh ? 0.78 : 0.48);
@@ -906,8 +979,9 @@ function detectLipSyncTargets(model) {
   const uniqueTongueRaiseNames = [...new Set(tongueRaiseParts.map((part) => part.key))];
   const uniqueTongueOutNames = [...new Set(tongueOutParts.map((part) => part.key))];
   const uniqueTongueCurlNames = [...new Set(tongueCurlParts.map((part) => part.key))];
+  const uniqueTeethNames = [...new Set(teethOpenParts.map((part) => part.key))];
   console.info(
-    `Lip-sync targets: open=${talkingOpenParts.length}, wide=${talkingWideParts.length}, round=${talkingRoundParts.length}, consonant=${talkingConsonantParts.length}, close=${talkingCloseParts.length}, tongueRaise=${tongueRaiseParts.length}, tongueOut=${tongueOutParts.length}, tongueCurl=${tongueCurlParts.length}, jaw=${jawBone ? jawBone.name : "none"}${JAW_BONE_LIP_SYNC_ENABLED ? "" : " (disabled)"}, lowerTeeth=${lowerTeethBone ? lowerTeethBone.name : "none"}`
+    `Lip-sync targets: open=${talkingOpenParts.length}, wide=${talkingWideParts.length}, round=${talkingRoundParts.length}, consonant=${talkingConsonantParts.length}, close=${talkingCloseParts.length}, tongueRaise=${tongueRaiseParts.length}, tongueOut=${tongueOutParts.length}, tongueCurl=${tongueCurlParts.length}, teeth=${teethOpenParts.length}, femaleMouth=${femaleMouthMorphParts.length}, jaw=${jawBone ? jawBone.name : "none"}${JAW_BONE_LIP_SYNC_ENABLED ? "" : " (disabled)"}, lowerTeeth=${lowerTeethBone ? lowerTeethBone.name : "none"}`
   );
   console.info("Lip-sync open morphs:", uniqueOpenNames.join(", "));
   console.info("Lip-sync wide morphs:", uniqueWideNames.join(", "));
@@ -917,6 +991,7 @@ function detectLipSyncTargets(model) {
   console.info("Tongue raise morphs:", uniqueTongueRaiseNames.join(", "));
   console.info("Tongue out morphs:", uniqueTongueOutNames.join(", "));
   console.info("Tongue curl morphs:", uniqueTongueCurlNames.join(", "));
+  console.info("Teeth open morphs:", uniqueTeethNames.join(", "));
 }
 
 function findJawTipTarget(jaw) {
@@ -1015,6 +1090,12 @@ function setLipSyncInfluence(influence, delta = 1 / 60) {
   const active = Math.pow(THREE.MathUtils.clamp(speechState.activity, 0, 1), 0.85);
   const openInfluence = Math.pow(clamped, 0.82) * (0.62 + active * 0.38);
 
+  if (currentAvatarKey === "female") {
+    applyFemaleAvaturnViseme(delta);
+    trackLipSyncDebug(clamped, openInfluence);
+    return;
+  }
+
   const applyCollection = (parts, amount) => {
     for (const part of parts) {
       if (!part.mesh.morphTargetInfluences) continue;
@@ -1027,6 +1108,7 @@ function setLipSyncInfluence(influence, delta = 1 / 60) {
   };
 
   applyCollection(talkingOpenParts, openInfluence);
+  applyCollection(teethOpenParts, THREE.MathUtils.clamp(openInfluence, 0, 0.55));
   applyCollection(talkingWideParts, speechState.wide * active * 0.85);
   applyCollection(talkingRoundParts, speechState.round * active * 0.95);
   applyCollection(talkingConsonantParts, speechState.consonant * active * 0.90);
@@ -1094,8 +1176,28 @@ function applyLowerTeethOffset() {
   lowerTeethBone.position.copy(tempVecA);
 }
 
+function applyFemaleAvaturnViseme(delta) {
+  if (currentAvatarKey !== "female") return;
+  const targets = FEMALE_AVATURN_VISEMES[activeFemaleVisemeId] || FEMALE_AVATURN_VISEMES[0];
+  const scale = THREE.MathUtils.clamp(femaleVisemeIntensity * 0.98, 0, 0.98);
+  for (const part of femaleMouthMorphParts) {
+    if (!part.mesh.morphTargetInfluences) continue;
+    const target = (targets[part.normalizedKey] || 0) * scale;
+    const current = (part.mesh.morphTargetInfluences[part.index] || 0) - part.baseValue;
+    const response = target > current ? 8.5 : 5.5;
+    const next = THREE.MathUtils.lerp(current, target, Math.min(1, delta * response));
+    part.mesh.morphTargetInfluences[part.index] = THREE.MathUtils.clamp(
+      part.baseValue + next,
+      0,
+      1
+    );
+  }
+}
+
 function resetLipSync() {
   mouthSmoothed = 0;
+  activeFemaleVisemeId = 0;
+  femaleVisemeIntensity = 0;
   jawSmoothedInfluence = 0;
   lowerTeethSmoothedInfluence = 0;
   speechState.activity = 0;
@@ -1236,6 +1338,151 @@ function cleanupShirtBleed(model) {
   geometry.userData.torsoTrimmed = true;
 }
 
+function applyAvatarStyling(model) {
+  model.traverse((node) => {
+    if (!node.isMesh && !node.isSkinnedMesh) return;
+    const nodeName = normalizeNodeName(node.name);
+    const materials = Array.isArray(node.material) ? node.material : [node.material];
+
+    if (currentAvatarKey === "male") {
+      if (
+        nodeName.startsWith("ccbaseeyeocclusion") ||
+        nodeName.includes("sideburnsstubble") ||
+        nodeName.includes("circlesparse") ||
+        nodeName.includes("mustachesparse") ||
+        nodeName.includes("soulpatchsparse")
+      ) {
+        node.visible = false;
+        return;
+      }
+      if (nodeName.includes("basictshirts")) {
+        node.scale.set(1.028, 1.014, 1.028);
+      }
+    }
+
+    for (const material of materials) {
+      if (!material) continue;
+      const materialName = normalizeNodeName(material.name);
+
+      if (currentAvatarKey === "male") {
+        material.metalness = 0;
+        material.envMapIntensity = 0.25;
+        if (materialName.includes("skin")) {
+          material.roughness = materialName.includes("body") ? 0.82 : 0.79;
+          material.envMapIntensity = 0.16;
+          material.color?.set(materialName.includes("arm") ? 0xffeee4 : 0xfff3ec);
+          if (material.normalMap && material.normalScale) {
+            const normalLift = materialName.includes("head") ? 1.08 : 1.03;
+            material.normalScale.set(normalLift, normalLift);
+          }
+        } else if (materialName.includes("tearline")) {
+          material.transparent = true;
+          material.opacity = 0.24;
+          material.alphaTest = 0.02;
+          material.depthWrite = false;
+          material.roughness = 0.02;
+          material.envMapIntensity = 0.2;
+          material.side = THREE.FrontSide;
+        } else if (materialName.includes("cornea")) {
+          material.transparent = true;
+          material.opacity = 0.3;
+          material.depthWrite = false;
+          material.roughness = 0.015;
+          material.envMapIntensity = 0.22;
+          material.side = THREE.FrontSide;
+        } else if (materialName.includes("eye") && !materialName.includes("eyelash")) {
+          material.roughness = 0.68;
+          material.envMapIntensity = 0.055;
+          material.color?.set(0xf3f0e8);
+        } else if (materialName.includes("scalp")) {
+          material.transparent = true;
+          material.opacity = 0;
+          material.depthWrite = false;
+          material.alphaTest = 1;
+        } else if (materialName.includes("eyelash")) {
+          material.roughness = 0.9;
+          material.envMapIntensity = 0.04;
+          material.alphaTest = 0.78;
+          material.transparent = true;
+          material.opacity = 0.36;
+          material.depthWrite = false;
+        } else if (materialName.includes("browbase")) {
+          material.roughness = 0.9;
+          material.envMapIntensity = 0.04;
+          material.color?.set(0xffffff);
+          material.alphaTest = 1;
+          material.transparent = true;
+          material.opacity = 0;
+          material.depthWrite = false;
+        } else if (materialName.includes("brow")) {
+          material.roughness = 0.9;
+          material.envMapIntensity = 0.06;
+          material.color?.set(0xffffff);
+          material.alphaTest = 0.6;
+          material.transparent = true;
+          material.opacity = 0.68;
+          material.depthWrite = false;
+        } else if (materialName.includes("hair")) {
+          material.roughness = 0.9;
+          material.envMapIntensity = 0.08;
+          material.alphaTest = 0.52;
+          material.transparent = true;
+          material.opacity = 0.78;
+          material.depthWrite = false;
+        } else if (materialName.includes("beard")) {
+          material.roughness = 0.86;
+          material.envMapIntensity = 0.12;
+          material.alphaTest = 0.4;
+          material.transparent = true;
+          material.opacity = 0.72;
+          material.depthWrite = false;
+        } else if (materialName.includes("basictshirts")) {
+          material.roughness = 0.92;
+          material.envMapIntensity = 0.055;
+          if (material.normalMap && material.normalScale) material.normalScale.set(1.34, 1.34);
+          material.polygonOffset = true;
+          material.polygonOffsetFactor = -1;
+          material.polygonOffsetUnits = -1;
+          material.depthWrite = true;
+        } else if (materialName.includes("teeth")) {
+          material.roughness = 0.62;
+          material.envMapIntensity = 0.12;
+        } else if (materialName.includes("tongue")) {
+          material.roughness = 0.9;
+          material.envMapIntensity = 0.05;
+          material.color?.set(0x4f1f26);
+        }
+      } else if (currentAvatarKey === "female") {
+        material.metalness = 0;
+        material.envMapIntensity = 0.16;
+        if (materialName.includes("hair")) {
+          material.roughness = 0.98;
+          material.envMapIntensity = 0.035;
+          material.transparent = false;
+          material.opacity = 1;
+          material.alphaTest = materialName.includes("hair0") ? 0.56 : 0.36;
+          material.alphaToCoverage = true;
+          material.depthWrite = true;
+          material.side = THREE.FrontSide;
+        } else if (materialName === "avaturnlook0material") {
+          material.roughness = 0.92;
+          material.envMapIntensity = 0.065;
+          if (material.normalMap && material.normalScale) material.normalScale.set(1.32, 1.32);
+        } else if (materialName === "body" || materialName === "head") {
+          material.roughness = 0.86;
+          material.envMapIntensity = 0.12;
+          if (material.normalMap && material.normalScale) material.normalScale.set(1.06, 1.06);
+        } else if (materialName.includes("eye")) {
+          material.roughness = 0.72;
+          material.envMapIntensity = 0.08;
+        }
+      }
+
+      material.needsUpdate = true;
+    }
+  });
+}
+
 function findFirstObject(root, names) {
   for (const name of names) {
     const found = root.getObjectByName(name);
@@ -1262,6 +1509,34 @@ function buildPoseRig(root) {
     eyeL: findFirstObject(root, ["CC_Base_L_Eye", "mixamorig:LeftEye", "LeftEye"]),
     eyeR: findFirstObject(root, ["CC_Base_R_Eye", "mixamorig:RightEye", "RightEye"]),
   };
+}
+
+function applyFirstAnimationFrame(root, gltf) {
+  const clip = gltf.animations?.[0];
+  if (!clip?.tracks?.length) return { applied: 0, tracks: 0, time: 0 };
+  const firstKeyTime = clip.tracks.reduce((time, track) => {
+    const trackTime = track.times?.length ? track.times[0] : time;
+    return Math.min(time, trackTime);
+  }, clip.duration || 0);
+  let applied = 0;
+  for (const track of clip.tracks) {
+    if (!track.values?.length) continue;
+    const [nodeName, propertyName] = track.name.split(".");
+    const node = root.getObjectByName(nodeName);
+    if (!node) continue;
+    if (propertyName === "position") {
+      node.position.fromArray(track.values, 0);
+      applied += 1;
+    } else if (propertyName === "quaternion") {
+      node.quaternion.fromArray(track.values, 0).normalize();
+      applied += 1;
+    } else if (propertyName === "scale") {
+      node.scale.fromArray(track.values, 0);
+      applied += 1;
+    }
+  }
+  root.updateMatrixWorld(true);
+  return { applied, tracks: clip.tracks.length, time: firstKeyTime };
 }
 
 function capturePoseRest(rig) {
@@ -1295,6 +1570,25 @@ function applyLocalEulerOffset(bone, x = 0, y = 0, z = 0) {
   tempEuler.set(x, y, z, "XYZ");
   tempQuat.setFromEuler(tempEuler);
   bone.quaternion.multiply(tempQuat);
+}
+
+function applyKevinFixedBodyPose(delta) {
+  if (currentAvatarKey !== "male" || !poseRig) return;
+  const breath = Math.sin(idleTime * 1.18);
+  const slow = Math.sin(idleTime * 0.42 + 0.7);
+  const focus = lipDrivenByAudio ? 0.35 : 1;
+
+  applyLocalEulerOffset(poseRig.spineLower, breath * 0.0025, slow * 0.003 * focus, 0);
+  applyLocalEulerOffset(poseRig.spineUpper, breath * 0.004, 0, 0.004 + slow * 0.003 * focus);
+  applyLocalEulerOffset(poseRig.clavicleL, 0, 0.006, -0.012 + breath * 0.003);
+  applyLocalEulerOffset(poseRig.clavicleR, 0, -0.004, 0.006 - breath * 0.002);
+
+  if (poseRig.upperArmL) poseRig.upperArmL.rotation.set(0.055 - 0.008, -0.08, -1.46);
+  if (poseRig.upperArmR) poseRig.upperArmR.rotation.set(0.055 + 0.006, 0.08, 1.46);
+  if (poseRig.forearmL) poseRig.forearmL.rotation.set(0.035 + 0.012 + breath * 0.002, -0.02, -0.105);
+  if (poseRig.forearmR) poseRig.forearmR.rotation.set(0.035 + 0.01 - breath * 0.0015, 0.02, 0.105);
+  if (poseRig.handL) poseRig.handL.rotation.set(0, 0, 0.018);
+  if (poseRig.handR) poseRig.handR.rotation.set(0, 0, -0.012);
 }
 
 function centerAvatar(root) {
@@ -1577,10 +1871,14 @@ async function initAvatar() {
   const avatar = AVATARS[currentAvatarKey] || AVATARS.male;
   const avatarGltf = await loader.loadAsync(avatar.url);
   const model = avatarGltf.scene;
+  const exportedPose = currentAvatarKey === "female"
+    ? applyFirstAnimationFrame(model, avatarGltf)
+    : null;
   avatarRoot = model;
   model.visible = false;
   centerAvatar(model);
   scene.add(model);
+  applyAvatarStyling(model);
   cleanupShirtBleed(model);
   poseRig = buildPoseRig(model);
   capturePoseRest(poseRig);
@@ -1607,8 +1905,8 @@ async function initAvatar() {
 
   setStatus(
     hasLipSyncTargets()
-      ? "Avatar ready. Tap Speak to start continuous voice mode."
-      : "Avatar loaded. Tap Speak to start continuous voice mode."
+      ? `Avatar ready. Tap Speak to start continuous voice mode.${exportedPose ? ` Female pose tracks=${exportedPose.tracks} applied=${exportedPose.applied} time=${exportedPose.time.toFixed(3)}s.` : ""}`
+      : `Avatar loaded. Tap Speak to start continuous voice mode.${exportedPose ? ` Female pose tracks=${exportedPose.tracks} applied=${exportedPose.applied} time=${exportedPose.time.toFixed(3)}s.` : ""}`
   );
   avatarReady = true;
   updateSpeakButtonState();
@@ -1701,8 +1999,8 @@ let audioCtx = null;
 let analyser = null;
 let freqData = null;
 let currentReplyAudio = null;
-let rhubarbMouthCues = [];
-let rhubarbCueIndex = 0;
+let visemeCues = [];
+let visemeCueIndex = 0;
 const lipSyncDebug = {
   active: false,
   frames: 0,
@@ -1734,7 +2032,7 @@ function endLipSyncDebug() {
   lipSyncDebug.active = false;
   const elapsed = (performance.now() - lipSyncDebug.startedAt) / 1000;
   console.info(
-    `[finalAnim] lip-sync debug frames=${lipSyncDebug.frames} seconds=${elapsed.toFixed(2)} maxMouth=${lipSyncDebug.maxMouth.toFixed(2)} maxOpen=${lipSyncDebug.maxOpen.toFixed(2)} maxJaw=${lipSyncDebug.maxJaw.toFixed(2)} cues=${rhubarbMouthCues.length}`
+    `[finalAnim] lip-sync debug frames=${lipSyncDebug.frames} seconds=${elapsed.toFixed(2)} maxMouth=${lipSyncDebug.maxMouth.toFixed(2)} maxOpen=${lipSyncDebug.maxOpen.toFixed(2)} maxJaw=${lipSyncDebug.maxJaw.toFixed(2)} cues=${visemeCues.length}`
   );
 }
 
@@ -1777,11 +2075,11 @@ function getBandAverage(startRatio, endRatio) {
 
 const AUDIO_LATENCY_OFFSET = 0.08; // 80ms latency offset to match Web Audio output
 
-function getRhubarbCueAt(time) {
-  if (!rhubarbMouthCues.length) return null;
+function getVisemeCueAt(time) {
+  if (!visemeCues.length) return null;
   const lookupTime = Math.max(0, time - AUDIO_LATENCY_OFFSET);
-  for (let i = 0; i < rhubarbMouthCues.length; i++) {
-    const cue = rhubarbMouthCues[i];
+  for (let i = 0; i < visemeCues.length; i++) {
+    const cue = visemeCues[i];
     const start = Number(cue.start || 0);
     const end = Number(cue.end || start);
     if (lookupTime >= start && lookupTime <= end) {
@@ -1791,63 +2089,91 @@ function getRhubarbCueAt(time) {
   return null;
 }
 
-function getRhubarbShapeTarget(shape) {
-  switch (String(shape || "X").toUpperCase()) {
-    case "A":
-      return { mouth: 0.05, activity: 0.46, close: 0.92, consonant: 0.24 };
-    case "B":
-      return { mouth: 0.28, activity: 0.9, consonant: 0.84, close: 0.34 };
-    case "C":
-      return { mouth: 0.75, activity: 0.98, wide: 0.24 };
-    case "D":
-      return { mouth: 0.95, activity: 1, wide: 0.16 };
-    case "E":
-      return { mouth: 0.55, activity: 0.98, round: 0.68 };
-    case "F":
-      return { mouth: 0.40, activity: 0.98, round: 0.96, close: 0.12 };
-    case "G":
-      return { mouth: 0.25, activity: 0.92, consonant: 0.82, close: 0.28 };
-    case "H":
-      return { mouth: 0.65, activity: 1, consonant: 0.62, tongue: 0.7 };
-    case "X":
-    default:
-      return { mouth: 0, activity: 0, close: 0 };
-  }
-}
-
 function getAzureShapeTarget(id) {
+  if (currentAvatarKey === "male") {
+    switch (Number(id)) {
+      case 0:
+        return { mouth: 0, activity: 0, close: 0.2 };
+      case 12:
+        return { mouth: 0.18, activity: 0.82, close: 0.95, consonant: 0.3 };
+      case 1:
+      case 4:
+        return { mouth: 0.72, activity: 1, wide: 0.62 };
+      case 2:
+      case 9:
+      case 11:
+        return { mouth: 1, activity: 1, wide: 0.28 };
+      case 3:
+      case 8:
+      case 10:
+        return { mouth: 0.82, activity: 1, round: 0.92 };
+      case 5:
+      case 13:
+      case 21:
+        return { mouth: 0.48, activity: 0.95, round: 0.48, consonant: 0.24 };
+      case 6:
+        return { mouth: 0.46, activity: 1, wide: 0.82, consonant: 0.2 };
+      case 7:
+        return { mouth: 0.3, activity: 0.95, round: 0.95 };
+      case 14:
+      case 17:
+      case 19:
+      case 20:
+        return { mouth: 0.38, activity: 0.95, consonant: 0.82, wide: 0.24 };
+      case 15:
+      case 16:
+      case 18:
+        return { mouth: 0.32, activity: 0.98, consonant: 0.78, wide: 0.36 };
+      default:
+        return { mouth: 0, activity: 0, close: 0 };
+    }
+  }
+
   switch (Number(id)) {
     case 0: // silence
-    case 12: // p, b, m
-      return { mouth: 0, activity: 0, close: 1 };
-    case 1: // ax, ah, ae
-    case 2: // aa
-    case 11: // ay
-      return { mouth: 0.88, activity: 0.95, wide: 0.3 };
-    case 3: // ao
-    case 8: // ow
-    case 9: // aw
-    case 10: // oy
-      return { mouth: 0.95, activity: 0.98, round: 0.75 };
-    case 4: // ey, eh, uh
-    case 5: // er
-      return { mouth: 0.60, activity: 0.95, wide: 0.45 };
-    case 6: // iy, ih, y
-      return { mouth: 0.35, activity: 0.98, wide: 0.85, consonant: 0.45 };
-    case 7: // uw, u, w
-      return { mouth: 0.22, activity: 0.9, round: 0.95 };
-    case 13: // f, v
-      return { mouth: 0.12, activity: 0.85, consonant: 0.95, close: 0.25 };
-    case 14: // th, dh
-    case 17: // t, d
-    case 19: // n
-    case 20: // l
-      return { mouth: 0.20, activity: 0.85, consonant: 0.85, wide: 0.25 };
-    case 15: // s, z
-    case 16: // sh, ch, jh, zh
-    case 18: // k, g
-    case 21: // r
-      return { mouth: 0.28, activity: 0.95, consonant: 0.75, wide: 0.45 };
+      return { mouth: 0, activity: 0, close: 0 };
+    case 1: // AE
+      return { mouth: 0.52, activity: 0.95, wide: 0.58 };
+    case 2: // AA
+      return { mouth: 0.88, activity: 1, wide: 0.24 };
+    case 3: // AO
+      return { mouth: 0.68, activity: 0.98, round: 0.82 };
+    case 4: // EH
+      return { mouth: 0.5, activity: 0.95, wide: 0.72 };
+    case 5: // ER
+      return { mouth: 0.34, activity: 0.92, round: 0.55 };
+    case 6: // IY
+      return { mouth: 0.36, activity: 0.96, wide: 0.82 };
+    case 7: // UW
+      return { mouth: 0.3, activity: 0.94, round: 0.95 };
+    case 8: // OW
+      return { mouth: 0.52, activity: 0.96, round: 0.88 };
+    case 9: // AW
+      return { mouth: 0.7, activity: 1, round: 0.38, wide: 0.2 };
+    case 10: // OY
+      return { mouth: 0.42, activity: 0.96, round: 0.62, wide: 0.28 };
+    case 11: // AY
+      return { mouth: 0.62, activity: 0.98, wide: 0.48 };
+    case 12: // H
+      return { mouth: 0.18, activity: 0.72, wide: 0.12 };
+    case 13: // R
+      return { mouth: 0.3, activity: 0.9, round: 0.48, consonant: 0.28 };
+    case 14: // L
+      return { mouth: 0.2, activity: 0.88, consonant: 0.7, tongue: 0.72 };
+    case 15: // S, Z
+      return { mouth: 0.2, activity: 0.9, consonant: 0.9, wide: 0.38 };
+    case 16: // SH
+      return { mouth: 0.24, activity: 0.92, consonant: 0.82, round: 0.45 };
+    case 17: // TH
+      return { mouth: 0.22, activity: 0.9, consonant: 0.84, tongue: 0.8 };
+    case 18: // F, V
+      return { mouth: 0.12, activity: 0.86, consonant: 0.95, close: 0.22 };
+    case 19: // D, T, N
+      return { mouth: 0.2, activity: 0.9, consonant: 0.82, tongue: 0.62 };
+    case 20: // K, G
+      return { mouth: 0.18, activity: 0.88, consonant: 0.76 };
+    case 21: // P, B, M
+      return { mouth: 0, activity: 0.92, consonant: 0.38, close: 1 };
     default:
       return { mouth: 0, activity: 0, close: 0 };
   }
@@ -1861,23 +2187,26 @@ function getVisemeShapeTarget(value) {
   if (!isNaN(num) && String(value).trim() !== "") {
     return getAzureShapeTarget(num);
   }
-  return getRhubarbShapeTarget(value);
+  return { mouth: 0, activity: 0, close: 0 };
 }
 
-function computeRhubarbLipSyncTarget(delta) {
-  if (!currentReplyAudio || !rhubarbMouthCues.length) return null;
+function computeVisemeLipSyncTarget(delta) {
+  if (!currentReplyAudio || !visemeCues.length) return null;
 
-  const cue = getRhubarbCueAt(currentReplyAudio.currentTime || 0);
+  const cue = getVisemeCueAt(currentReplyAudio.currentTime || 0);
+  activeFemaleVisemeId = currentAvatarKey === "female" ? Number(cue?.value || 0) : 0;
   const targetState = getVisemeShapeTarget(cue?.value);
   const loudness = getAnalyserLoudness();
+  femaleVisemeIntensity = cue
+    ? THREE.MathUtils.clamp(0.82 + loudness * 0.3, 0.82, 1)
+    : 0;
 
   const isSilentValue =
     !cue?.value ||
-    String(cue.value).toUpperCase() === "X" ||
     cue.value === 0 ||
-    cue.value === 12 ||
+    cue.value === 21 ||
     String(cue.value) === "0" ||
-    String(cue.value) === "12";
+    String(cue.value) === "21";
 
   const energyScale = !isSilentValue
     ? THREE.MathUtils.clamp(0.75 + loudness * 0.35, 0.70, 1.10)
@@ -2020,7 +2349,12 @@ function updatePose(delta) {
   applyLocalEulerOffset(poseRig.eyeL, lookPitch * 0.28, lookYaw * 0.42, 0);
   applyLocalEulerOffset(poseRig.eyeR, lookPitch * 0.28, lookYaw * 0.42, 0);
 
-  if (!useAnimatedBase) {
+  if (!useAnimatedBase && currentAvatarKey === "male") {
+    applyKevinFixedBodyPose(delta);
+    return;
+  }
+
+  if (!useAnimatedBase && currentAvatarKey !== "female") {
     const shoulderLift = Math.sin(idleTime * 1.7 + 0.8) * 0.015;
     applyLocalEulerOffset(
       poseRig.clavicleL,
@@ -2059,15 +2393,15 @@ function tick() {
   mixer?.update(delta);
 
   if (lipDrivenByAudio && analyser && hasLipSyncTargets()) {
-    if (rhubarbMouthCues.length > 0) {
-      mouthSmoothed = computeRhubarbLipSyncTarget(delta);
+    if (visemeCues.length > 0) {
+      mouthSmoothed = computeVisemeLipSyncTarget(delta);
     } else {
       mouthSmoothed = computeLipSyncTarget(delta);
     }
     setLipSyncInfluence(mouthSmoothed, delta);
   } else if (!lipDrivenByAudio && mouthSmoothed > 0.002) {
-    if (rhubarbMouthCues.length > 0) {
-      mouthSmoothed = computeRhubarbLipSyncTarget(delta);
+    if (visemeCues.length > 0) {
+      mouthSmoothed = computeVisemeLipSyncTarget(delta);
     } else {
       mouthSmoothed = computeLipSyncTarget(delta);
     }
@@ -2139,8 +2473,8 @@ async function playReplyAudio(base64, mime, mouthCues = []) {
   audio.src = url;
   audio.crossOrigin = "anonymous";
   currentReplyAudio = audio;
-  rhubarbMouthCues = Array.isArray(mouthCues) ? mouthCues : [];
-  rhubarbCueIndex = 0;
+  visemeCues = Array.isArray(mouthCues) ? mouthCues : [];
+  visemeCueIndex = 0;
   beginLipSyncDebug();
 
   const srcNode = audioCtx.createMediaElementSource(audio);
@@ -2154,8 +2488,8 @@ async function playReplyAudio(base64, mime, mouthCues = []) {
     endLipSyncDebug();
     lipDrivenByAudio = false;
     currentReplyAudio = null;
-    rhubarbMouthCues = [];
-    rhubarbCueIndex = 0;
+    visemeCues = [];
+    visemeCueIndex = 0;
     resetLipSync();
     URL.revokeObjectURL(url);
     try {
