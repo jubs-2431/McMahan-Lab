@@ -49,6 +49,9 @@ const participantError = document.getElementById("participant-error");
 const participantLabel = document.getElementById("participant-label");
 const modeLabel = document.getElementById("mode-label");
 const changeParticipantBtn = document.getElementById("change-participant");
+const openRulesBtn = document.getElementById("open-rules");
+const rulesDialog = document.getElementById("rules-dialog");
+const rulesConfirmBtn = document.getElementById("rules-confirm");
 const roundCurrentEl = document.getElementById("round-current");
 const roundTotalEl = document.getElementById("round-total");
 const roundPotEl = document.getElementById("round-pot");
@@ -2294,6 +2297,29 @@ let confederateChatSignature = "";
 const confederateDrafts = new Map();
 let humanTypingTimer = null;
 let lastHumanTypingText = "";
+let pendingParticipantId = "";
+
+function openRulesDialog(participantId = "") {
+  pendingParticipantId = participantId;
+  if (rulesConfirmBtn) {
+    rulesConfirmBtn.textContent = participantId ? "Start session" : "Return to game";
+  }
+  if (rulesDialog && !rulesDialog.open) {
+    rulesDialog.showModal();
+  }
+  window.setTimeout(() => rulesConfirmBtn?.focus(), 0);
+}
+
+function closeRulesDialog() {
+  if (rulesDialog?.open) rulesDialog.close();
+}
+
+function confirmRules() {
+  const participantId = pendingParticipantId;
+  pendingParticipantId = "";
+  closeRulesDialog();
+  if (participantId) setParticipantActive(participantId);
+}
 
 function updatePose(delta) {
   if (!poseRig) return;
@@ -2944,7 +2970,17 @@ participantForm?.addEventListener("submit", (event) => {
     participantInput?.focus();
     return;
   }
-  setParticipantActive(participantId);
+  openRulesDialog(participantId);
+});
+
+openRulesBtn?.addEventListener("click", () => {
+  openRulesDialog();
+});
+
+rulesConfirmBtn?.addEventListener("click", confirmRules);
+
+rulesDialog?.addEventListener("cancel", () => {
+  pendingParticipantId = "";
 });
 
 changeParticipantBtn?.addEventListener("click", () => {
