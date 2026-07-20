@@ -355,6 +355,7 @@ async function registerParticipantSession() {
     if (!res.ok) throw new Error(data.error || res.statusText || "Could not register session");
     currentInteractionMode = normalizeRouteMode(data.mode);
     updateModeButtonsState();
+    applyGameState(data);
   } catch (error) {
     console.warn("Could not register participant session:", error);
   }
@@ -715,6 +716,26 @@ function updateGamePanel() {
   if (roundPotEl) roundPotEl.textContent = String(GAME_ROUND_POT);
   if (bankTotalEl) bankTotalEl.textContent = String(gameBank);
   if (roundPhaseEl) roundPhaseEl.textContent = gameComplete ? "Complete" : gamePhase;
+}
+
+function applyGameState(data) {
+  if (!data || typeof data !== "object") return;
+  gameBank = Number(data.bank ?? gameBank);
+  gameComplete = !!data.complete;
+  gameRound = gameComplete
+    ? GAME_TOTAL_ROUNDS
+    : Math.min(GAME_TOTAL_ROUNDS, Number(data.next_round ?? data.round ?? gameRound));
+  gamePhase = gameComplete ? "Complete" : "Ready";
+  updateGamePanel();
+  updateSendButtonState();
+}
+
+async function syncParticipantGameState() {
+  if (!conversationSessionId) return;
+  const res = await fetch(`/api/session-state/${encodeURIComponent(conversationSessionId)}`);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || res.statusText || "Could not refresh game state");
+  applyGameState(data);
 }
 
 function getInitialAvatarKey() {
@@ -2701,14 +2722,16 @@ async function sendTranscript(text) {
 
 async function sendSplitStealChoice(choice) {
   const normalizedChoice = (choice || "").trim().toLowerCase();
-  if (!["split", "steal"].includes(normalizedChoice) || requestInFlight || !participantActive || !conversationSessionId) return;
+  if (!["split", "steal"].includes(normalizedChoice) || requestInFlight || !participantActive || !conversationSessionId || gameComplete) return;
 
   if (recognitionListening) {
     stopVoiceRecognition();
   }
 
   setTranscript(`I choose ${normalizedChoice}.`);
-  setStatus("Assistant is choosing split or steal...");
+  setStatus(`Round ${gameRound}: choice locked. Processing...`);
+  gamePhase = "Waiting";
+  updateGamePanel();
   requestInFlight = true;
   updateSpeakButtonState();
   updateSendButtonState();
@@ -2719,12 +2742,16 @@ async function sendSplitStealChoice(choice) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         choice: normalizedChoice,
+        expected_round: gameRound,
         session_id: conversationSessionId || undefined,
         avatar: currentAvatarKey,
       }),
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
+      if (data && (data.round !== undefined || data.complete !== undefined)) {
+        applyGameState(data);
+      }
       throw new Error(data.error || res.statusText || "Request failed");
     }
 
@@ -2732,7 +2759,9 @@ async function sendSplitStealChoice(choice) {
       persistSessionId(data.session_id.trim());
     }
 
-    setStatus(data.reply || "");
+    applyGameState(data);
+
+    setStatus(gameComplete ? `Session complete. Total bank: $${gameBank}.` : data.reply || "Round complete.");
     addDialogueEntry({
       type: "split-steal",
       userChoice: data.user_choice || normalizedChoice,
@@ -2743,12 +2772,19 @@ async function sendSplitStealChoice(choice) {
     });
     if (data.audio_base64) {
       await playReplyAudio(data.audio_base64, data.audio_mime, data.mouth_cues);
-      if (!voiceModeEnabled) {
-        setStatus(data.reply || "Tap Speak to start continuous voice mode.");
+      if (!voiceModeEnabled && !gameComplete) {
+        setStatus(`Round ${gameRound} ready. Pot is $${Number(data.pot ?? GAME_ROUND_POT)}.`);
       }
     }
   } catch (e) {
     setStatus(String(e.message || e));
+    try {
+      await syncParticipantGameState();
+    } catch (syncError) {
+      console.warn("Could not refresh game state after failed choice:", syncError);
+      gamePhase = "Ready";
+      updateGamePanel();
+    }
   } finally {
     requestInFlight = false;
     updateSpeakButtonState();

@@ -57,8 +57,8 @@ ignored by Git.
 
 Current limitations:
 
-- Human mode enforces the seven-round counter and bank. AI and Unknown rounds are
-  logged, but their browser counter/bank flow still needs equivalent enforcement.
+- All routes enforce the seven-round counter and accumulate the participant's
+  payouts in the displayed bank.
 - Unknown currently follows the same OpenAI route as AI.
 - The confederate can see a submitted Human-mode choice before selecting a reply.
 

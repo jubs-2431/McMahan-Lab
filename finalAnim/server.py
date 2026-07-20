@@ -180,6 +180,10 @@ def _append_game_round(
     assistant_choice: str,
     outcome: str,
     reply: str,
+    round_no: int,
+    payout: int,
+    bank: int,
+    pot: int,
 ) -> None:
     with SESSION_LOCK:
         rounds = GAME_STORE.setdefault(session_id, deque(maxlen=50))
@@ -191,6 +195,10 @@ def _append_game_round(
                 "assistant_choice": assistant_choice,
                 "outcome": outcome,
                 "reply": reply,
+                "round": round_no,
+                "payout": payout,
+                "bank": bank,
+                "pot": pot,
             }
         )
         log_dir = _participant_log_dir(session_id)
@@ -203,6 +211,10 @@ def _append_game_round(
                 "assistant_choice": assistant_choice,
                 "outcome": outcome,
                 "reply": reply,
+                "round": round_no,
+                "payout": payout,
+                "bank": bank,
+                "pot": pot,
             },
         )
         _save_session_files_locked(session_id)
@@ -226,6 +238,7 @@ def _human_session_locked(session_id: str) -> dict[str, object]:
             "total_rounds": HUMAN_MAX_ROUNDS,
             "pot": HUMAN_ROUND_POT,
             "bank": 0,
+            "ai_choice_pending": False,
             "typing_text": "",
             "typing_updated_at": None,
             "last_activity_at": None,
@@ -324,6 +337,14 @@ def _split_steal_outcome(user_choice: str, assistant_choice: str) -> str:
     if user_choice == "split" and assistant_choice == "steal":
         return "assistant_wins"
     return "no_one_wins"
+
+
+def _split_steal_payout(outcome: str) -> int:
+    if outcome == "tie":
+        return HUMAN_ROUND_POT // 2
+    if outcome == "user_wins":
+        return HUMAN_ROUND_POT
+    return 0
 
 
 def _outcome_label(outcome: str) -> str:
@@ -714,6 +735,14 @@ def session_mode(session_id: str):
     return jsonify({"session_id": normalized_session_id, "mode": mode})
 
 
+@app.get("/api/session-state/<session_id>")
+def session_state(session_id: str):
+    normalized_session_id = _normalize_session_id(session_id)
+    with SESSION_LOCK:
+        state = _human_current_state_locked(normalized_session_id)
+    return jsonify({"session_id": normalized_session_id, **state})
+
+
 @app.post("/api/confederate/session-mode")
 def confederate_session_mode():
     payload = request.get_json(silent=True) or {}
@@ -909,89 +938,139 @@ def split_steal():
     if not user_choice:
         return jsonify({"error": "Missing valid `choice`; use `split` or `steal`."}), 400
     session_id = _normalize_session_id(payload.get("session_id"))
-
-    api_key = os.environ.get("OPENAI_API_KEY", "").strip()
-    if not api_key:
-        return jsonify({"error": "OPENAI_API_KEY is not set in .env"}), 500
-
-    model = os.environ.get("OPENAI_MODEL", "gpt-4o-mini").strip()
-    client = OpenAI(api_key=api_key)
-
-    choice_completion = client.chat.completions.create(
-        model=model,
-        messages=[
-            {
-                "role": "system",
-                "content": (
-                    "You are Kevin playing one round of Split or Steal. "
-                    "Choose your move before seeing the user's move. "
-                    "Do not ask for the participant's name or identifying information. "
-                    "Reply with exactly one word: Split or Steal."
-                ),
-            },
-            *_get_model_history_snapshot(session_id),
-            {
-                "role": "user",
-                "content": "Pick your move now. Do not ask questions. Reply only Split or Steal.",
-            },
-        ],
-        max_tokens=5,
-        temperature=0.9,
-    )
-    assistant_choice = _extract_split_steal_choice(
-        choice_completion.choices[0].message.content or ""
-    )
-    outcome = _split_steal_outcome(user_choice, assistant_choice)
-    reply = _format_split_steal_reply(user_choice, assistant_choice, outcome)
-
-    _append_session_turn(
-        session_id,
-        f"I choose {user_choice} in Split or Steal.",
-        reply,
-    )
-    _append_game_round(session_id, user_choice, assistant_choice, outcome, reply)
-
-    azure_key = os.environ.get("AZURE_SPEECH_KEY", "").strip()
-    azure_region = os.environ.get("AZURE_SPEECH_REGION", "").strip()
-    avatar = payload.get("avatar", "male").strip().lower()
-
-    if not azure_key or not azure_region:
-        return jsonify({
-            "error": "Azure Speech credentials are required for speech and visemes",
-            "reply": reply,
-            "session_id": session_id,
-            "user_choice": user_choice,
-            "assistant_choice": assistant_choice,
-            "outcome": outcome
-        }), 502
     try:
-        voice = os.environ.get("AZURE_VOICE_FEMALE" if avatar == "female" else "AZURE_VOICE_MALE", "").strip()
-        if not voice:
-            voice = "en-US-JennyNeural" if avatar == "female" else "en-US-BrianNeural"
-        audio_bytes, mouth_cues = _azure_speak_bytes(reply, voice)
-        mime = "audio/wav"
-    except Exception as e:
-        return jsonify({
-            "error": f"Azure Speech synthesis failed: {e}",
+        expected_round = int(payload.get("expected_round"))
+    except (TypeError, ValueError):
+        return jsonify({"error": "Missing valid `expected_round`."}), 400
+
+    with SESSION_LOCK:
+        session = _human_session_locked(session_id)
+        state = _human_current_state_locked(session_id)
+        if state["complete"]:
+            return jsonify({"error": "All rounds are complete.", "session_id": session_id, **state}), 400
+        if expected_round != int(session["round"]):
+            return jsonify({"error": "Round state changed; refresh before choosing again.", "session_id": session_id, **state}), 409
+        if session.get("ai_choice_pending"):
+            return jsonify({"error": "A choice is already being processed.", "session_id": session_id, **state}), 409
+        round_no = int(session["round"])
+        starting_bank = int(session["bank"])
+        pot = int(session["pot"])
+        session["ai_choice_pending"] = True
+
+    try:
+        api_key = os.environ.get("OPENAI_API_KEY", "").strip()
+        if not api_key:
+            return jsonify({"error": "OPENAI_API_KEY is not set in .env"}), 500
+
+        model = os.environ.get("OPENAI_MODEL", "gpt-4o-mini").strip()
+        client = OpenAI(api_key=api_key)
+        choice_completion = client.chat.completions.create(
+            model=model,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are Kevin playing one round of Split or Steal. "
+                        "Choose your move before seeing the user's move. "
+                        "Do not ask for the participant's name or identifying information. "
+                        "Reply with exactly one word: Split or Steal."
+                    ),
+                },
+                *_get_model_history_snapshot(session_id),
+                {
+                    "role": "user",
+                    "content": "Pick your move now. Do not ask questions. Reply only Split or Steal.",
+                },
+            ],
+            max_tokens=5,
+            temperature=0.9,
+        )
+        assistant_choice = _extract_split_steal_choice(
+            choice_completion.choices[0].message.content or ""
+        )
+        outcome = _split_steal_outcome(user_choice, assistant_choice)
+        payout = _split_steal_payout(outcome)
+        bank = starting_bank + payout
+        reply = _format_split_steal_reply(user_choice, assistant_choice, outcome)
+
+        _append_session_turn(
+            session_id,
+            f"I choose {user_choice} in Split or Steal.",
+            reply,
+        )
+        _append_game_round(
+            session_id,
+            user_choice,
+            assistant_choice,
+            outcome,
+            reply,
+            round_no,
+            payout,
+            bank,
+            pot,
+        )
+
+        with SESSION_LOCK:
+            session = _human_session_locked(session_id)
+            session["bank"] = bank
+            is_last = round_no >= int(session["total_rounds"])
+            session["round"] = int(session["total_rounds"]) + 1 if is_last else round_no + 1
+            resolved_at = datetime.now(timezone.utc).isoformat()
+            session["last_activity_at"] = resolved_at
+            resolved_event = {
+                "type": "ai_choice_resolved",
+                "round": round_no,
+                "participant_choice": user_choice,
+                "assistant_choice": assistant_choice,
+                "outcome": outcome,
+                "payout": payout,
+                "bank": bank,
+                "mode": session.get("mode") or "ai",
+                "timestamp": resolved_at,
+            }
+            session["events"].append(resolved_event)
+            _append_jsonl(_participant_log_dir(session_id) / "events.jsonl", resolved_event)
+            next_round = min(int(session["round"]), int(session["total_rounds"]))
+            total_rounds = int(session["total_rounds"])
+
+        response_payload = {
             "reply": reply,
             "session_id": session_id,
             "user_choice": user_choice,
             "assistant_choice": assistant_choice,
-            "outcome": outcome
-        }), 502
+            "outcome": outcome,
+            "payout": payout,
+            "round": round_no,
+            "next_round": next_round,
+            "pot": pot,
+            "bank": bank,
+            "total_rounds": total_rounds,
+            "complete": is_last,
+        }
 
-    b64 = base64.b64encode(audio_bytes).decode("ascii")
-    response_payload = {
-        "reply": reply,
-        "audio_base64": b64,
-        "audio_mime": mime,
-        "mouth_cues": mouth_cues,
-        "session_id": session_id,
-        "user_choice": user_choice,
-        "assistant_choice": assistant_choice,
-        "outcome": outcome,
-    }
-    return jsonify(response_payload)
+        azure_key = os.environ.get("AZURE_SPEECH_KEY", "").strip()
+        azure_region = os.environ.get("AZURE_SPEECH_REGION", "").strip()
+        avatar = str(payload.get("avatar") or "male").strip().lower()
+        if not azure_key or not azure_region:
+            response_payload["audio_error"] = "Azure Speech credentials are not configured."
+            return jsonify(response_payload)
+
+        try:
+            voice = os.environ.get("AZURE_VOICE_FEMALE" if avatar == "female" else "AZURE_VOICE_MALE", "").strip()
+            if not voice:
+                voice = "en-US-JennyNeural" if avatar == "female" else "en-US-BrianNeural"
+            audio_bytes, mouth_cues = _azure_speak_bytes(reply, voice)
+            response_payload.update({
+                "audio_base64": base64.b64encode(audio_bytes).decode("ascii"),
+                "audio_mime": "audio/wav",
+                "mouth_cues": mouth_cues,
+            })
+        except Exception as exc:
+            response_payload["audio_error"] = f"Azure Speech synthesis failed: {exc}"
+        return jsonify(response_payload)
+    finally:
+        with SESSION_LOCK:
+            _human_session_locked(session_id)["ai_choice_pending"] = False
 
 
 @app.get("/api/health")
