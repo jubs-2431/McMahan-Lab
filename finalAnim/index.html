@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Avatar Voice</title>
+    <title>Split or Steal</title>
     <link rel="icon" href="data:," />
     <style>
       :root {
@@ -108,7 +108,9 @@
       }
       #participant-submit,
       #confederate-open,
-      #change-participant {
+      #change-participant,
+      #open-rules,
+      #rules-confirm {
         border: none;
         border-radius: 10px;
         padding: 0.8rem 1rem;
@@ -117,6 +119,10 @@
         cursor: pointer;
       }
       #participant-submit {
+        background: var(--primary);
+        color: #fff;
+      }
+      #rules-confirm {
         background: var(--primary);
         color: #fff;
       }
@@ -270,12 +276,82 @@
         color: var(--text-muted);
         font-size: 0.84rem;
       }
-      #change-participant {
+      #participant-actions {
+        display: flex;
+        align-items: center;
+        gap: 0.45rem;
+      }
+      #change-participant,
+      #open-rules {
         border: 1px solid var(--border-strong);
         background: var(--surface);
         color: var(--text);
         padding: 0.45rem 0.7rem;
         font-size: 0.8rem;
+      }
+      #rules-dialog {
+        width: min(620px, calc(100% - 32px));
+        max-height: min(760px, calc(100dvh - 32px));
+        margin: auto;
+        padding: 0;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: var(--surface);
+        color: var(--text);
+        box-shadow: 0 24px 60px rgba(15, 23, 42, 0.2);
+      }
+      #rules-dialog::backdrop {
+        background: rgba(15, 23, 42, 0.48);
+      }
+      #rules-content {
+        padding: 1.4rem;
+        overflow: auto;
+      }
+      #rules-content h2 {
+        margin: 0;
+        font-size: 1.35rem;
+      }
+      #rules-summary {
+        margin: 0.55rem 0 1.1rem;
+        color: var(--text-muted);
+        line-height: 1.5;
+      }
+      #rules-outcomes {
+        margin: 0;
+        border-top: 1px solid var(--border);
+      }
+      .rules-outcome {
+        display: grid;
+        grid-template-columns: minmax(0, 1.2fr) minmax(140px, 0.8fr);
+        gap: 1rem;
+        align-items: center;
+        padding: 0.8rem 0;
+        border-bottom: 1px solid var(--border);
+      }
+      .rules-outcome dt,
+      .rules-outcome dd {
+        margin: 0;
+      }
+      .rules-outcome dt {
+        font-weight: 700;
+      }
+      .rules-outcome dd {
+        color: var(--text-muted);
+        text-align: right;
+      }
+      #rules-notes {
+        margin: 1rem 0 0;
+        padding-left: 1.25rem;
+        color: var(--text-muted);
+        line-height: 1.5;
+      }
+      #rules-notes li + li {
+        margin-top: 0.35rem;
+      }
+      #rules-actions {
+        display: flex;
+        justify-content: flex-end;
+        margin-top: 1.2rem;
       }
       #speak {
         min-width: 160px;
@@ -573,6 +649,17 @@
         .confederate-route-actions {
           grid-template-columns: repeat(2, minmax(0, 1fr));
         }
+        #participant-bar {
+          align-items: flex-start;
+          flex-wrap: wrap;
+        }
+        .rules-outcome {
+          grid-template-columns: 1fr;
+          gap: 0.25rem;
+        }
+        .rules-outcome dd {
+          text-align: left;
+        }
         .confederate-header,
         .confederate-actions {
           flex-direction: column;
@@ -626,7 +713,10 @@
         <div id="participant-bar">
           <span id="participant-label">Participant ID: --</span>
           <span id="mode-label">Session active</span>
-          <button type="button" id="change-participant">Change ID</button>
+          <div id="participant-actions">
+            <button type="button" id="open-rules">Rules</button>
+            <button type="button" id="change-participant">Change ID</button>
+          </div>
         </div>
         <div id="session-panel" aria-label="Round and pot counters">
           <div class="metric">
@@ -687,7 +777,41 @@
           </div>
         </div>
       </section>
+      <dialog id="rules-dialog" aria-labelledby="rules-title" aria-describedby="rules-summary">
+        <div id="rules-content">
+          <h2 id="rules-title">How to Play Split or Steal</h2>
+          <p id="rules-summary">
+            You will play 7 rounds. Each round has a fresh $100 pot. Talk with the avatar, then choose Split or Steal.
+          </p>
+          <dl id="rules-outcomes">
+            <div class="rules-outcome">
+              <dt>You both choose Split</dt>
+              <dd>You receive $50</dd>
+            </div>
+            <div class="rules-outcome">
+              <dt>You choose Steal; the avatar chooses Split</dt>
+              <dd>You receive $100</dd>
+            </div>
+            <div class="rules-outcome">
+              <dt>You choose Split; the avatar chooses Steal</dt>
+              <dd>You receive $0</dd>
+            </div>
+            <div class="rules-outcome">
+              <dt>You both choose Steal</dt>
+              <dd>You receive $0</dd>
+            </div>
+          </dl>
+          <ul id="rules-notes">
+            <li>You may chat with the avatar before making each choice.</li>
+            <li>Once you submit Split or Steal for a round, your choice cannot be changed.</li>
+            <li>There are no right or wrong choices. Choose naturally.</li>
+          </ul>
+          <div id="rules-actions">
+            <button type="button" id="rules-confirm">Start session</button>
+          </div>
+        </div>
+      </dialog>
     </div>
-    <script type="module" src="/main.js?v=20260620-all-mode-monitor-v4"></script>
+    <script type="module" src="/main.js?v=20260715-participant-rules"></script>
   </body>
 </html>

@@ -12,7 +12,13 @@ const io = new Server(server);
 const PORT = process.env.PORT || 3000;
 const MAX_ROUNDS = 7;
 const ROUND_POT = 100;
+// Researcher-controlled practice condition; browser clients cannot override it.
+const PRACTICE_OPPONENT_CHOICE =
+  String(process.env.PRACTICE_OPPONENT_CHOICE || "split").toLowerCase() === "steal"
+    ? "steal"
+    : "split";
 const LOG_PATH = path.join(__dirname, "rounds_log.csv");
+const PRACTICE_LOG_PATH = path.join(__dirname, "practice_rounds_log.csv");
 const PARTICIPANT_LOG_ROOT = path.join(__dirname, "participant_logs");
 const PARTICIPANT_ID_PATTERN = /^[A-Za-z0-9_-]{3,80}$/;
 
@@ -156,6 +162,41 @@ function logParticipantRound(row) {
   appendParticipantCsv(path.join(dir, "rounds.csv"), row);
 }
 
+function logPracticeRound({
+  timestamp,
+  matchId,
+  round,
+  playerId,
+  opponentId,
+  playerChoice,
+  opponentChoice,
+  payout,
+  outcome,
+}) {
+  if (!fs.existsSync(PRACTICE_LOG_PATH)) {
+    fs.writeFileSync(
+      PRACTICE_LOG_PATH,
+      "timestamp,match_id,round,participant_id,opponent_id,player_choice,opponent_choice,payout,outcome\n",
+      "utf8"
+    );
+  }
+  const row =
+    [
+      timestamp,
+      matchId,
+      round,
+      playerId,
+      opponentId,
+      playerChoice,
+      opponentChoice,
+      payout,
+      outcome,
+    ]
+      .map((v) => `"${String(v).replace(/"/g, '""')}"`)
+      .join(",") + "\n";
+  fs.appendFileSync(PRACTICE_LOG_PATH, row, "utf8");
+}
+
 // ---------- STATE ----------
 /**
  * playersByClientId: clientId -> {
@@ -184,6 +225,7 @@ const matches = new Map();
 // Lobby queue of clientIds
 let lobbyQueue = [];
 let matchCounter = 1;
+let practiceMatchCounter = 1;
 
 // ---------- HELPERS ----------
 function randomClientId() {
@@ -204,6 +246,10 @@ function computeOutcome(c1, c2) {
     return { code: "p2-steals", payout1: 0, payout2: ROUND_POT };
   }
   return { code: "both-steal", payout1: 0, payout2: 0 };
+}
+
+function isValidChoice(choice) {
+  return choice === "split" || choice === "steal";
 }
 
 function removeFromQueue(clientId) {
@@ -314,6 +360,79 @@ io.on("connection", (socket) => {
     }
   });
 
+  socket.on("startPractice", (data, callback) => {
+    const normalizedParticipantId =
+      normalizeParticipantId(data && data.participantId) ||
+      normalizeParticipantId(data && data.clientId) ||
+      normalizeParticipantId(data && data.name);
+    const fixedChoice = PRACTICE_OPPONENT_CHOICE;
+
+    if (!normalizedParticipantId) {
+      if (typeof callback === "function") {
+        callback({ ok: false, error: "Invalid participant ID." });
+      }
+      return;
+    }
+
+    const clientId = normalizedParticipantId;
+    const name = normalizedParticipantId;
+    removeFromQueue(clientId);
+
+    let player = playersByClientId.get(clientId);
+    if (!player) {
+      player = {
+        clientId,
+        name,
+        lobbySocketId: socket.id,
+        gameSocketId: null,
+        matchId: null,
+      };
+      playersByClientId.set(clientId, player);
+    } else {
+      player.name = name;
+      player.lobbySocketId = socket.id;
+    }
+
+    socketToClientId.set(socket.id, clientId);
+
+    const matchId = "P-" + practiceMatchCounter++;
+    const opponentId = `${matchId}-BOT`;
+    const opponentName = "Practice Opponent";
+    const match = {
+      matchId,
+      clientIds: [clientId, opponentId],
+      round: 1,
+      maxRounds: MAX_ROUNDS,
+      pot: ROUND_POT,
+      choices: {},
+      practice: true,
+      fixedChoice,
+      practicePlayerId: clientId,
+      practiceOpponentId: opponentId,
+      practiceOpponentName: opponentName,
+    };
+
+    matches.set(matchId, match);
+    player.matchId = matchId;
+
+    console.log(
+      `Practice match created: ${matchId} for ${player.name}; fixed opponent=${fixedChoice}`
+    );
+
+    if (typeof callback === "function") {
+      callback({
+        ok: true,
+        clientId,
+        name,
+        matchId,
+        opponentName,
+        totalRounds: match.maxRounds,
+        pot: match.pot,
+        fixedChoice,
+      });
+    }
+  });
+
   socket.on("registerGame", (data, callback) => {
     const { clientId, matchId } = data || {};
     const player = playersByClientId.get(clientId);
@@ -331,6 +450,11 @@ io.on("connection", (socket) => {
 
     const opponentId = match.clientIds.find((id) => id !== clientId);
     const opponent = playersByClientId.get(opponentId);
+    const opponentName = match.practice
+      ? match.practiceOpponentName
+      : opponent
+      ? opponent.name
+      : "Opponent";
 
     console.log(
       `Game register: ${clientId} (${player.name}) joined match ${matchId}`
@@ -340,7 +464,7 @@ io.on("connection", (socket) => {
       callback({
         ok: true,
         name: player.name,
-        opponentName: opponent ? opponent.name : "Opponent",
+        opponentName,
         round: match.round,
         totalRounds: match.maxRounds,
         pot: match.pot,
@@ -355,8 +479,12 @@ io.on("connection", (socket) => {
     const player = playersByClientId.get(clientId);
     const match = matches.get(matchId);
     if (!player || !match || player.matchId !== matchId) return;
+    if (!isValidChoice(choice)) return;
 
     match.choices[clientId] = choice;
+    if (match.practice) {
+      match.choices[match.practiceOpponentId] = match.fixedChoice;
+    }
 
     const [c1, c2] = match.clientIds;
     if (match.choices[c1] && match.choices[c2]) {
@@ -364,36 +492,50 @@ io.on("connection", (socket) => {
       const choice2 = match.choices[c2];
       const p1 = playersByClientId.get(c1);
       const p2 = playersByClientId.get(c2);
-      if (!p1 || !p2) return;
+      if (!p1 || (!p2 && !match.practice)) return;
 
       const outcome = computeOutcome(choice1, choice2);
       const ts = new Date().toISOString();
       const roundNo = match.round;
       const isLastRound = roundNo >= match.maxRounds;
 
-      // Log from each perspective
-      logRound({
-        timestamp: ts,
-        matchId,
-        round: roundNo,
-        playerId: p1.name,
-        opponentId: p2.name,
-        playerChoice: choice1,
-        opponentChoice: choice2,
-        payout: outcome.payout1,
-        outcome: outcome.code,
-      });
-      logRound({
-        timestamp: ts,
-        matchId,
-        round: roundNo,
-        playerId: p2.name,
-        opponentId: p1.name,
-        playerChoice: choice2,
-        opponentChoice: choice1,
-        payout: outcome.payout2,
-        outcome: outcome.code,
-      });
+      if (match.practice) {
+        logPracticeRound({
+          timestamp: ts,
+          matchId,
+          round: roundNo,
+          playerId: p1.name,
+          opponentId: match.practiceOpponentName,
+          playerChoice: choice1,
+          opponentChoice: choice2,
+          payout: outcome.payout1,
+          outcome: outcome.code,
+        });
+      } else {
+        // Log from each perspective
+        logRound({
+          timestamp: ts,
+          matchId,
+          round: roundNo,
+          playerId: p1.name,
+          opponentId: p2.name,
+          playerChoice: choice1,
+          opponentChoice: choice2,
+          payout: outcome.payout1,
+          outcome: outcome.code,
+        });
+        logRound({
+          timestamp: ts,
+          matchId,
+          round: roundNo,
+          playerId: p2.name,
+          opponentId: p1.name,
+          playerChoice: choice2,
+          opponentChoice: choice1,
+          payout: outcome.payout2,
+          outcome: outcome.code,
+        });
+      }
 
       // Notify players
       if (p1.gameSocketId) {
@@ -405,13 +547,13 @@ io.on("connection", (socket) => {
           opponentChoice: choice2,
           payout: outcome.payout1,
           pot: match.pot,
-          opponentName: p2.name,
+          opponentName: match.practice ? match.practiceOpponentName : p2.name,
           outcome: outcome.code,
           isLastRound,
         });
       }
 
-      if (p2.gameSocketId) {
+      if (p2 && p2.gameSocketId) {
         io.to(p2.gameSocketId).emit("roundResult", {
           matchId,
           round: roundNo,
@@ -429,7 +571,7 @@ io.on("connection", (socket) => {
       if (isLastRound) {
         // Clean up match
         p1.matchId = null;
-        p2.matchId = null;
+        if (p2) p2.matchId = null;
         matches.delete(matchId);
       } else {
         match.round += 1;
@@ -458,6 +600,12 @@ io.on("connection", (socket) => {
       if (player.matchId) {
         const match = matches.get(player.matchId);
         if (match) {
+          if (match.practice) {
+            matches.delete(player.matchId);
+            player.matchId = null;
+            console.log("Socket disconnected:", socket.id, "clientId:", clientId);
+            return;
+          }
           const otherId = match.clientIds.find((id) => id !== clientId);
           const other = playersByClientId.get(otherId);
           if (other && other.gameSocketId) {

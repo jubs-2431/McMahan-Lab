@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Split or Steal - Practice</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body class="landing-body">
+  <div class="app">
+    <main class="card landing-card">
+      <h1>Split or Steal Practice</h1>
+      <p class="subtitle">
+        Enter your participant ID to start a practice session.
+      </p>
+
+      <div class="landing-form">
+        <label for="playerName" class="label">Participant ID</label>
+        <input
+          type="text"
+          id="playerName"
+          class="text-input"
+          placeholder="e.g. P001"
+          autocomplete="off"
+          autocapitalize="characters"
+          spellcheck="false"
+        />
+
+        <button type="button" class="btn primary landing-play-btn" id="practiceBtn">
+          Start Practice
+        </button>
+
+        <p class="small" id="practiceStatus">
+          Connecting to server...
+        </p>
+      </div>
+    </main>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="practice.js" defer></script>
+</body>
+</html>

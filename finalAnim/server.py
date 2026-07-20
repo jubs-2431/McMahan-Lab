@@ -8,8 +8,6 @@ import io
 import json
 import os
 import re
-import subprocess
-import tempfile
 import time
 import wave
 import uuid
@@ -20,15 +18,13 @@ from threading import Lock
 from typing import Optional, Tuple
 
 from dotenv import load_dotenv
-from flask import Flask, jsonify, request, send_file, send_from_directory
+from flask import Flask, jsonify, request, send_from_directory
 from openai import OpenAI
 
 load_dotenv()
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 LOG_ROOT = Path(ROOT) / "participant_logs"
-BASIC_ANIM_ROOT = "/Users/aryanshah/Downloads/BasicAnim"
-RHUBARB_BIN = Path(ROOT) / "vendor" / "rhubarb" / "Rhubarb-Lip-Sync-1.14.0-macOS" / "rhubarb"
 DEFAULT_PREFERENCES = (
     "You have stable, human-like preferences and can talk naturally about them. "
     "Keep them light, conversational, and internally consistent across turns. "
@@ -39,13 +35,6 @@ SESSION_STORE: dict[str, deque[dict[str, str]]] = {}
 GAME_STORE: dict[str, deque[dict[str, str]]] = {}
 HUMAN_QUEUE: dict[str, dict[str, object]] = {}
 SESSION_LOCK = Lock()
-ANIMATION_ASSET_MAP = {
-    "Breathing Idle.glb": os.path.join(BASIC_ANIM_ROOT, "Breathing Idle.glb"),
-    "Looking Around.glb": os.path.join(BASIC_ANIM_ROOT, "Looking Around.glb"),
-    "Thinking.glb": os.path.join(BASIC_ANIM_ROOT, "Thinking.glb"),
-    "Daven.glb": os.path.join(BASIC_ANIM_ROOT, "Daven.glb"),
-}
-
 app = Flask(__name__)
 
 
@@ -470,16 +459,13 @@ def _speak_response_payload(reply: str, avatar: str, session_id: str, extra: Opt
     azure_region = os.environ.get("AZURE_SPEECH_REGION", "").strip()
     avatar_key = (avatar or "male").strip().lower()
 
-    if azure_key and azure_region:
-        voice = os.environ.get("AZURE_VOICE_FEMALE" if avatar_key == "female" else "AZURE_VOICE_MALE", "").strip()
-        if not voice:
-            voice = "en-US-JennyNeural" if avatar_key == "female" else "en-US-BrianNeural"
-        audio_bytes, mouth_cues = _azure_speak_bytes(reply, voice)
-        mime = "audio/wav"
-        rhubarb_error = None
-    else:
-        audio_bytes, mime = _deepgram_speak_bytes(reply)
-        mouth_cues, rhubarb_error = _rhubarb_mouth_cues(audio_bytes, reply)
+    if not azure_key or not azure_region:
+        raise RuntimeError("Azure Speech credentials are required for speech and visemes")
+    voice = os.environ.get("AZURE_VOICE_FEMALE" if avatar_key == "female" else "AZURE_VOICE_MALE", "").strip()
+    if not voice:
+        voice = "en-US-JennyNeural" if avatar_key == "female" else "en-US-BrianNeural"
+    audio_bytes, mouth_cues = _azure_speak_bytes(reply, voice)
+    mime = "audio/wav"
 
     payload = {
         "reply": reply,
@@ -488,50 +474,9 @@ def _speak_response_payload(reply: str, avatar: str, session_id: str, extra: Opt
         "mouth_cues": mouth_cues,
         "session_id": session_id,
     }
-    if rhubarb_error:
-        payload["rhubarb_error"] = rhubarb_error
     if extra:
         payload.update(extra)
     return payload
-
-
-def _rhubarb_mouth_cues(audio_bytes: bytes, dialog_text: str) -> Tuple[list[dict[str, object]], Optional[str]]:
-    if not RHUBARB_BIN.exists():
-        return [], "Rhubarb binary is not installed"
-
-    try:
-        with tempfile.TemporaryDirectory(prefix="finalanim-rhubarb-") as tmp_dir:
-            tmp_path = Path(tmp_dir)
-            wav_path = tmp_path / "reply.wav"
-            dialog_path = tmp_path / "dialog.txt"
-            cues_path = tmp_path / "cues.json"
-
-            wav_path.write_bytes(audio_bytes)
-            dialog_path.write_text(dialog_text.strip() + "\n", encoding="utf-8")
-
-            subprocess.run(
-                [
-                    str(RHUBARB_BIN),
-                    "-f",
-                    "json",
-                    "--extendedShapes",
-                    "GHX",
-                    "-d",
-                    str(dialog_path),
-                    "-o",
-                    str(cues_path),
-                    str(wav_path),
-                ],
-                check=True,
-                capture_output=True,
-                text=True,
-                timeout=30,
-            )
-            payload = json.loads(cues_path.read_text(encoding="utf-8"))
-            cues = payload.get("mouthCues", [])
-            return cues if isinstance(cues, list) else [], None
-    except Exception as exc:
-        return [], str(exc)
 
 
 def _generate_chat_reply(user_text: str, session_id: str) -> str:
@@ -575,14 +520,26 @@ def index():
     return send_from_directory(ROOT, "index.html")
 
 
-@app.route("/talkinghead-test")
-def talkinghead_test():
-    return send_from_directory(ROOT, "talkinghead_test.html")
+@app.route("/avatar-female.glb")
+def avatar_female_glb():
+    return send_from_directory(
+        os.path.join(ROOT, "test-avatars"),
+        "avaturn_feale_pose_edit.glb",
+        mimetype="model/gltf-binary",
+        conditional=True,
+        max_age=0,
+    )
 
 
-@app.route("/headtts-test")
-def headtts_test():
-    return send_from_directory(ROOT, "headtts_test.html")
+@app.route("/avatar-male.glb")
+def avatar_male_glb():
+    return send_from_directory(
+        os.path.join(ROOT, "output", "conversions"),
+        "kevin_cc_reexport_three_fixed.glb",
+        mimetype="model/gltf-binary",
+        conditional=True,
+        max_age=0,
+    )
 
 
 @app.route("/confederate")
@@ -601,63 +558,6 @@ def vendor_file(filename: str):
     return send_from_directory(
         os.path.join(ROOT, "vendor"),
         filename,
-        conditional=True,
-        max_age=3600,
-    )
-
-
-@app.route("/kevin.glb")
-def kevin_glb():
-    return send_from_directory(
-        ROOT,
-        "kevin.glb",
-        mimetype="model/gltf-binary",
-        conditional=True,
-        max_age=3600,
-    )
-
-
-@app.route("/female.glb")
-def female_glb():
-    return send_from_directory(
-        ROOT,
-        "female.glb",
-        mimetype="model/gltf-binary",
-        conditional=True,
-        max_age=3600,
-    )
-
-
-@app.route("/kevin_talkinghead.glb")
-def kevin_talkinghead_glb():
-    return send_from_directory(
-        ROOT,
-        "kevin_talkinghead.glb",
-        mimetype="model/gltf-binary",
-        conditional=True,
-        max_age=3600,
-    )
-
-
-@app.route("/female_talkinghead.glb")
-def female_talkinghead_glb():
-    return send_from_directory(
-        ROOT,
-        "female_talkinghead.glb",
-        mimetype="model/gltf-binary",
-        conditional=True,
-        max_age=3600,
-    )
-
-
-@app.route("/animation-assets/<path:filename>")
-def animation_asset(filename: str):
-    file_path = ANIMATION_ASSET_MAP.get(filename)
-    if not file_path or not os.path.isfile(file_path):
-        return jsonify({"error": f"Unknown animation asset: {filename}"}), 404
-    return send_file(
-        file_path,
-        mimetype="model/gltf-binary",
         conditional=True,
         max_age=3600,
     )
@@ -682,22 +582,16 @@ def ask():
     azure_region = os.environ.get("AZURE_SPEECH_REGION", "").strip()
     avatar = payload.get("avatar", "male").strip().lower()
 
-    if azure_key and azure_region:
-        try:
-            voice = os.environ.get("AZURE_VOICE_FEMALE" if avatar == "female" else "AZURE_VOICE_MALE", "").strip()
-            if not voice:
-                voice = "en-US-JennyNeural" if avatar == "female" else "en-US-BrianNeural"
-            audio_bytes, mouth_cues = _azure_speak_bytes(reply, voice)
-            mime = "audio/wav"
-            rhubarb_error = None
-        except Exception as e:
-            return jsonify({"error": f"Azure Speech synthesis failed: {e}", "reply": reply, "session_id": session_id}), 502
-    else:
-        try:
-            audio_bytes, mime = _deepgram_speak_bytes(reply)
-        except Exception as e:
-            return jsonify({"error": f"Deepgram Speech synthesis failed: {e}", "reply": reply, "session_id": session_id}), 502
-        mouth_cues, rhubarb_error = _rhubarb_mouth_cues(audio_bytes, reply)
+    if not azure_key or not azure_region:
+        return jsonify({"error": "Azure Speech credentials are required for speech and visemes", "reply": reply, "session_id": session_id}), 502
+    try:
+        voice = os.environ.get("AZURE_VOICE_FEMALE" if avatar == "female" else "AZURE_VOICE_MALE", "").strip()
+        if not voice:
+            voice = "en-US-JennyNeural" if avatar == "female" else "en-US-BrianNeural"
+        audio_bytes, mouth_cues = _azure_speak_bytes(reply, voice)
+        mime = "audio/wav"
+    except Exception as e:
+        return jsonify({"error": f"Azure Speech synthesis failed: {e}", "reply": reply, "session_id": session_id}), 502
 
     b64 = base64.b64encode(audio_bytes).decode("ascii")
     response_payload = {
@@ -707,8 +601,6 @@ def ask():
         "mouth_cues": mouth_cues,
         "session_id": session_id,
     }
-    if rhubarb_error:
-        response_payload["rhubarb_error"] = rhubarb_error
     return jsonify(response_payload)
 
 
@@ -728,6 +620,23 @@ def reply_only():
         return jsonify({"error": str(e), "session_id": session_id}), 500
 
     return jsonify({"reply": reply, "session_id": session_id})
+
+
+@app.post("/api/viseme-demo-speak")
+def viseme_demo_speak():
+    payload = request.get_json(silent=True) or {}
+    text = (payload.get("text") or "").strip()
+    if not text:
+        return jsonify({"error": "Missing `text` in JSON body."}), 400
+    if len(text) > 500:
+        return jsonify({"error": "`text` must be 500 characters or fewer."}), 400
+
+    session_id = _normalize_session_id(payload.get("session_id"))
+    avatar = (payload.get("avatar") or "male").strip().lower()
+    try:
+        return jsonify(_speak_response_payload(text, avatar, session_id))
+    except Exception as e:
+        return jsonify({"error": str(e), "session_id": session_id}), 502
 
 
 @app.post("/api/human-message")
@@ -1046,36 +955,30 @@ def split_steal():
     azure_region = os.environ.get("AZURE_SPEECH_REGION", "").strip()
     avatar = payload.get("avatar", "male").strip().lower()
 
-    if azure_key and azure_region:
-        try:
-            voice = os.environ.get("AZURE_VOICE_FEMALE" if avatar == "female" else "AZURE_VOICE_MALE", "").strip()
-            if not voice:
-                voice = "en-US-JennyNeural" if avatar == "female" else "en-US-BrianNeural"
-            audio_bytes, mouth_cues = _azure_speak_bytes(reply, voice)
-            mime = "audio/wav"
-            rhubarb_error = None
-        except Exception as e:
-            return jsonify({
-                "error": f"Azure Speech synthesis failed: {e}",
-                "reply": reply,
-                "session_id": session_id,
-                "user_choice": user_choice,
-                "assistant_choice": assistant_choice,
-                "outcome": outcome
-            }), 502
-    else:
-        try:
-            audio_bytes, mime = _deepgram_speak_bytes(reply)
-        except Exception as e:
-            return jsonify({
-                "error": f"Deepgram Speech synthesis failed: {e}",
-                "reply": reply,
-                "session_id": session_id,
-                "user_choice": user_choice,
-                "assistant_choice": assistant_choice,
-                "outcome": outcome
-            }), 502
-        mouth_cues, rhubarb_error = _rhubarb_mouth_cues(audio_bytes, reply)
+    if not azure_key or not azure_region:
+        return jsonify({
+            "error": "Azure Speech credentials are required for speech and visemes",
+            "reply": reply,
+            "session_id": session_id,
+            "user_choice": user_choice,
+            "assistant_choice": assistant_choice,
+            "outcome": outcome
+        }), 502
+    try:
+        voice = os.environ.get("AZURE_VOICE_FEMALE" if avatar == "female" else "AZURE_VOICE_MALE", "").strip()
+        if not voice:
+            voice = "en-US-JennyNeural" if avatar == "female" else "en-US-BrianNeural"
+        audio_bytes, mouth_cues = _azure_speak_bytes(reply, voice)
+        mime = "audio/wav"
+    except Exception as e:
+        return jsonify({
+            "error": f"Azure Speech synthesis failed: {e}",
+            "reply": reply,
+            "session_id": session_id,
+            "user_choice": user_choice,
+            "assistant_choice": assistant_choice,
+            "outcome": outcome
+        }), 502
 
     b64 = base64.b64encode(audio_bytes).decode("ascii")
     response_payload = {
@@ -1088,8 +991,6 @@ def split_steal():
         "assistant_choice": assistant_choice,
         "outcome": outcome,
     }
-    if rhubarb_error:
-        response_payload["rhubarb_error"] = rhubarb_error
     return jsonify(response_payload)
 
 
