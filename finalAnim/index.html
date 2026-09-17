@@ -220,6 +220,15 @@
         opacity: 0.45;
         cursor: not-allowed;
       }
+      #session-recovery {
+        border: 1px solid #a84c45;
+        border-radius: 8px;
+        padding: 12px;
+        background: #fff7f5;
+      }
+      #session-recovery[hidden] { display: none; }
+      #recovery-retry { padding: 8px 16px; cursor: pointer; }
+      #operator-status { color: #556274; min-height: 1.2em; }
       #status {
         font-size: 0.9rem;
         color: var(--text-muted);
@@ -750,7 +759,11 @@
           <button type="button" class="game-choice" data-choice="steal" disabled>Steal</button>
         </div>
         <button type="button" id="speak" disabled>Speak</button>
-        <div id="status">Loading avatar…</div>
+        <div id="status" role="status" aria-live="polite">Loading avatar…</div>
+        <div id="session-recovery" hidden role="status">
+          <p id="recovery-message"></p>
+          <button type="button" id="recovery-retry">Reconnect</button>
+        </div>
         <div id="transcript"></div>
         <div id="history" aria-live="polite">
           <div class="history-empty">No dialogue yet.</div>
@@ -758,10 +771,11 @@
         <div id="voice-note">Type a message or tap Speak once to keep the conversation running. Tap Stop speaking to end voice mode.</div>
       </div>
       <section id="confederate-panel" aria-label="Confederate control">
+        <p id="operator-status" role="status" aria-live="polite">Connected.</p>
         <div class="confederate-header">
           <div>
             <h1>Confederate Control</h1>
-            <p>Pick a participant ID, watch their live human-mode activity, and send responses that the avatar will speak.</p>
+            <p>Pick a participant ID to monitor activity across Human, AI, and Unknown sessions. Send avatar responses for Human sessions.</p>
           </div>
           <div class="confederate-actions">
             <button type="button" id="confederate-refresh">Refresh</button>
@@ -812,6 +826,6 @@
         </div>
       </dialog>
     </div>
-    <script type="module" src="/main.js?v=20260720-round-bank-state"></script>
+    <script type="module" src="/main.js?v=20260911-recovery"></script>
   </body>
 </html>

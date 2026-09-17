@@ -26,8 +26,8 @@ const LIP_SYNC_MESH_INCLUDE_PATTERN = /ccbasebody|ccbaseteeth|ccbasetongue|headm
 const LIP_SYNC_EXCLUDE_PATTERN = /(blink|brow|tongue|eye|squint|cheek|nostril|smile|frown|close|press|pucker|purse|funnel|stretch|narrow|roll|tight|suck)/;
 const LIP_SYNC_OPEN_PATTERN = /(jawopen|mouthopen|openjaw|openmouth|vopen|vlipopen)/;
 const LIP_SYNC_VOWEL_PATTERN = /(visemeaa|visemeah|visemeao|visemeoh|visemeou|phonemeaa|phonemeah|phonemeao|phonemeoh|phonemeou|vwide|vtighto)/;
-const BUILD_ID = "20260708-female-professional-viseme-frames";
-const PARTICIPANT_ID_PATTERN = /^[A-Za-z0-9_-]{3,40}$/;
+const BUILD_ID = "20260911-recovery";
+const PARTICIPANT_ID_PATTERN = /^[A-Za-z0-9_-]{3,80}$/;
 
 const appEl = document.getElementById("app");
 const canvas = document.getElementById("viewport");
@@ -70,6 +70,10 @@ const GAME_ROUND_POT = 100;
 const HUMAN_POLL_INTERVAL_MS = 900;
 const HUMAN_POLL_TIMEOUT_MS = 180000;
 const CONFEDERATE_POLL_INTERVAL_MS = 1200;
+const recoveryPanel = document.getElementById("session-recovery");
+const recoveryMessage = document.getElementById("recovery-message");
+const recoveryButton = document.getElementById("recovery-retry");
+const operatorStatus = document.getElementById("operator-status");
 
 function getViewportSize() {
   const width = Math.max(stageEl?.clientWidth || window.innerWidth, 1);
@@ -253,6 +257,8 @@ function renderDialogueHistory() {
 
 function addDialogueEntry(entry) {
   if (!participantActive) return;
+  if (entry.requestId && dialogueHistory.some((old) =>
+    old.requestId === entry.requestId && old.role === entry.role && old.type === entry.type)) return;
   dialogueHistory.push({ ...entry, at: new Date().toISOString() });
   dialogueHistory = dialogueHistory.slice(-50);
   saveDialogueHistory();
@@ -274,11 +280,12 @@ function getOutcomeText(outcome) {
 
 function getInitialInteractionMode() {
   const params = new URLSearchParams(window.location.search);
-  const requested = params.get("mode") || window.localStorage.getItem(INTERACTION_MODE_STORAGE_KEY);
+  const requested = params.get("mode");
   return ["ai", "human", "unknown", "confederate"].includes(requested) ? requested : "ai";
 }
 
 function persistInteractionMode(mode) {
+  if (mode === "confederate") return;
   try {
     window.localStorage.setItem(INTERACTION_MODE_STORAGE_KEY, mode);
   } catch (error) {
@@ -327,43 +334,34 @@ function normalizeRouteMode(mode) {
 }
 
 async function getAssignedInteractionMode() {
-  if (!conversationSessionId) return "ai";
-  try {
-    const res = await fetch(`/api/session-mode/${encodeURIComponent(conversationSessionId)}`);
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || res.statusText || "Could not read session mode");
-    currentInteractionMode = normalizeRouteMode(data.mode);
-    updateModeButtonsState();
-    return currentInteractionMode;
-  } catch (error) {
-    console.warn("Could not load assigned interaction mode:", error);
-    return "ai";
-  }
+  const epoch = sessionEpoch;
+  if (!conversationSessionId) throw new Error("Sign in before continuing.");
+  const data = await apiJSON(`/api/session-mode/${encodeURIComponent(conversationSessionId)}`);
+  assertCurrentSession(epoch);
+  if (!["ai", "human", "unknown"].includes(data.mode)) throw new Error("The assigned route is unavailable. Reconnect to continue.");
+  currentInteractionMode = data.mode;
+  updateModeButtonsState();
+  return currentInteractionMode;
 }
 
 async function registerParticipantSession() {
-  if (!conversationSessionId) return;
-  try {
-    const res = await fetch("/api/session-register", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        session_id: conversationSessionId,
-      }),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || res.statusText || "Could not register session");
-    currentInteractionMode = normalizeRouteMode(data.mode);
-    updateModeButtonsState();
-    applyGameState(data);
-  } catch (error) {
-    console.warn("Could not register participant session:", error);
-  }
+  const epoch = sessionEpoch;
+  const data = await apiJSON("/api/session-register", {
+    method: "POST", body: JSON.stringify({ session_id: conversationSessionId, avatar: currentAvatarKey }),
+  });
+  assertCurrentSession(epoch);
+  if (!["ai", "human", "unknown"].includes(data.mode)) throw new Error("The assigned route is unavailable. Reconnect to continue.");
+  currentInteractionMode = data.mode;
+  updateModeButtonsState();
+  applyGameState(data);
+  return data;
 }
 
 function enterConfederateMode() {
+  cancelReplyAudio?.();
   if (voiceModeEnabled) setVoiceModeEnabled(false);
   participantActive = false;
+  sessionEpoch += 1;
   requestInFlight = false;
   appEl?.classList.remove("needs-login");
   appEl?.classList.add("confederate-mode");
@@ -382,6 +380,12 @@ function exitConfederateMode() {
 
 function renderConfederateSessions() {
   if (!confederateSessionList) return;
+  const signature = JSON.stringify([confederateSelectedSessionId, confederateSessions.map((item) =>
+    [item.session_id, item.mode, item.pending_count, item.round, item.total_rounds, !!item.typing_text])]);
+  if (signature === confederateListSignature) return;
+  confederateListSignature = signature;
+  const focusedId = confederateSessionList.contains(document.activeElement)
+    ? document.activeElement.dataset.sessionId : null;
   confederateSessionList.replaceChildren();
 
   if (confederateSessions.length === 0) {
@@ -397,6 +401,7 @@ function renderConfederateSessions() {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "confederate-session";
+    button.dataset.sessionId = sessionId;
     button.classList.toggle("active", sessionId === confederateSelectedSessionId);
     button.textContent = `Participant ${sessionId}`;
 
@@ -417,11 +422,13 @@ function renderConfederateSessions() {
     });
 
     confederateSessionList.appendChild(button);
+    if (focusedId === sessionId) button.focus({ preventScroll: true });
   });
 }
 
 function renderConfederateCard(item) {
   const draftKey = `${item.session_id}:${item.id}`;
+  if (confederateCards.has(draftKey)) return confederateCards.get(draftKey);
   const card = document.createElement("article");
   card.className = "confederate-card";
 
@@ -444,6 +451,8 @@ function renderConfederateCard(item) {
       input.type = "radio";
       input.name = `confederate-choice-${item.id}`;
       input.value = choice;
+      input.checked = confederateChoices.get(draftKey) === choice;
+      input.addEventListener("change", () => confederateChoices.set(draftKey, choice));
       label.append(input, choice[0].toUpperCase() + choice.slice(1));
       choiceRow.appendChild(label);
     });
@@ -467,6 +476,7 @@ function renderConfederateCard(item) {
   error.className = "confederate-error";
 
   submit.addEventListener("click", async () => {
+    if (confederateSubmissions.has(draftKey)) return;
     const selected = card.querySelector(`input[name="confederate-choice-${item.id}"]:checked`);
     if (item.kind === "choice" && !selected) {
       error.textContent = "Choose Split or Steal first.";
@@ -477,31 +487,32 @@ function renderConfederateCard(item) {
       textarea.focus();
       return;
     }
+    confederateSubmissions.add(draftKey);
     submit.disabled = true;
     error.textContent = "";
     try {
-      const res = await fetch("/api/confederate/reply", {
+      await apiJSON("/api/confederate/reply", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          session_id: item.session_id,
-          message_id: item.id,
-          reply: textarea.value.trim(),
-          choice: selected ? selected.value : undefined,
+          session_id: item.session_id, message_id: item.id,
+          reply: textarea.value.trim(), choice: selected ? selected.value : undefined,
         }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || res.statusText || "Submit failed");
+      }, 15000);
       confederateDrafts.delete(draftKey);
+      confederateChoices.delete(draftKey);
+      confederateCards.delete(draftKey);
       confederateChatSignature = "";
       await fetchConfederateSessions();
     } catch (err) {
       submit.disabled = false;
       error.textContent = String(err.message || err);
+    } finally {
+      confederateSubmissions.delete(draftKey);
     }
   });
 
   card.append(meta, message, choiceRow, textarea, submit, error);
+  confederateCards.set(draftKey, card);
   return card;
 }
 
@@ -515,7 +526,7 @@ function renderConfederateEvent(event) {
 
   const meta = document.createElement("div");
   meta.className = "confederate-event-meta";
-  meta.textContent = String(event.type || "event").replaceAll("_", " ");
+  meta.textContent = `${String(event.type || "event").replaceAll("_", " ")} · ${eventTimestamp(event) ? new Date(eventTimestamp(event)).toLocaleTimeString() : ""}`;
   item.appendChild(meta);
 
   const addLine = (label, text) => {
@@ -527,7 +538,12 @@ function renderConfederateEvent(event) {
     item.appendChild(line);
   };
 
-  if (event.type === "chat_turn") {
+  if (event.type === "split_steal" || event.type === "ai_choice_resolved") {
+    addLine("Round", event.round);
+    addLine("Choices", `Participant ${event.participant_choice || event.user_choice}; opponent ${event.assistant_choice}`);
+    addLine("Payout", `$${Number(event.payout || 0)} · Bank $${Number(event.bank || 0)}`);
+    addLine("Outcome", getOutcomeText(event.outcome));
+  } else if (event.type === "chat_turn") {
     addLine("Participant", event.participant_text);
     addLine("Avatar", event.avatar_text);
   } else if (event.type === "participant_message") {
@@ -585,6 +601,7 @@ function renderConfederateChat() {
   const signature = JSON.stringify({
     session_id: confederateSelectedSessionId,
     mode: normalizeRouteMode(session.mode),
+    recoverable: (session.recoverable || []).map((item) => [item.id, item.status]),
     bank: Number(session.bank || 0),
     round: Number(session.round || 1),
     total_rounds: Number(session.total_rounds || GAME_TOTAL_ROUNDS),
@@ -607,7 +624,15 @@ function renderConfederateChat() {
       round: event.round || null,
     })),
   });
+  const liveTyping = document.getElementById("confederate-typing");
+  if (liveTyping) {
+    liveTyping.textContent = session.typing_text ? `Typing now: ${session.typing_text}` : "";
+    liveTyping.hidden = !session.typing_text;
+  }
   if (signature === confederateChatSignature) return;
+  const focused = confederateChat.contains(document.activeElement) ? document.activeElement : null;
+  const selection = focused?.tagName === "TEXTAREA" ? [focused.selectionStart, focused.selectionEnd] : null;
+  const scrollTop = confederateChat.scrollTop;
   confederateChatSignature = signature;
   confederateChat.replaceChildren();
 
@@ -626,22 +651,40 @@ function renderConfederateChat() {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "route-choice";
+    button.disabled = (session.recoverable || []).length > 0;
     button.classList.toggle("active", normalizeRouteMode(session.mode) === mode);
     button.textContent = label;
     button.addEventListener("click", () => setConfederateSessionMode(confederateSelectedSessionId, mode));
     routeActions.appendChild(button);
   });
   confederateChat.appendChild(routeActions);
+  (session.recoverable || []).filter((item) => item.status !== "ready").forEach((item) => {
+    const cancel = document.createElement("button");
+    cancel.textContent = `Cancel pending response (${item.id})`;
+    cancel.addEventListener("click", async () => {
+      const reason = window.prompt("Reason for cancelling this uncompleted response (saved in the session log):");
+      if (!reason?.trim()) return;
+      cancel.disabled = true;
+      try {
+        await apiJSON("/api/confederate/cancel", { method: "POST", body: JSON.stringify({
+          session_id: session.session_id, message_id: item.id, reason: reason.trim(),
+        }) });
+        await fetchConfederateSessions();
+      } catch (error) { cancel.disabled = false; setStatus(error.message); }
+    });
+    confederateChat.appendChild(cancel);
+  });
 
   const typingText = String(session.typing_text || "").trim();
-  if (typingText) {
-    const typing = document.createElement("div");
-    typing.id = "confederate-typing";
-    typing.textContent = `Typing now: ${typingText}`;
-    confederateChat.appendChild(typing);
-  }
+  const typing = document.createElement("div");
+  typing.id = "confederate-typing";
+  typing.textContent = typingText ? `Typing now: ${typingText}` : "";
+  typing.hidden = !typingText;
+  confederateChat.appendChild(typing);
 
-  const visibleEvents = recentEvents.filter((event) => !["human_message_pending", "human_choice_pending"].includes(event.type));
+  const visibleEvents = recentEvents.filter((event) =>
+    !["human_message_pending", "human_choice_pending"].includes(event.type) &&
+    !(event.schema_version === 2 && ["ai_choice_resolved", "human_choice_resolved"].includes(event.type)));
   if (visibleEvents.length > 0) {
     visibleEvents.slice(-12).forEach((event) => {
       confederateChat.appendChild(renderConfederateEvent(event));
@@ -659,31 +702,37 @@ function renderConfederateChat() {
   }
 
   pending.forEach((item) => confederateChat.appendChild(renderConfederateCard(item)));
+  if (focused && confederateChat.contains(focused)) {
+    focused.focus({ preventScroll: true });
+    if (selection) focused.setSelectionRange(...selection);
+  }
+  confederateChat.scrollTop = scrollTop;
 }
 
 async function setConfederateSessionMode(sessionId, mode) {
   if (!sessionId) return;
   try {
-    const res = await fetch("/api/confederate/session-mode", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ session_id: sessionId, mode }),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || res.statusText || "Could not set mode");
+    await apiJSON("/api/confederate/session-mode", {
+      method: "POST", body: JSON.stringify({ session_id: sessionId, mode }),
+    }, 15000);
     confederateChatSignature = "";
+    operatorStatus.textContent = "Route saved.";
     await fetchConfederateSessions();
   } catch (error) {
-    console.warn("Could not set confederate session mode:", error);
+    operatorStatus.textContent = error.message || "Could not change the route.";
   }
 }
 
 async function fetchConfederateSessions() {
-  if (!confederatePanel || !appEl?.classList.contains("confederate-mode")) return;
+  if (!confederatePanel || !appEl?.classList.contains("confederate-mode") || confederatePollInFlight) return;
+  confederatePollInFlight = true;
   try {
-    const res = await fetch("/api/confederate/sessions");
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || res.statusText || "Confederate poll failed");
+    const data = await apiJSON("/api/confederate/sessions", {}, 10000);
+    if (operatorStatus.dataset.offline === "true") operatorStatus.textContent = "Connected.";
+    operatorStatus.dataset.offline = "false";
+    if (data.session_errors?.length) {
+      operatorStatus.textContent = `These saved sessions need recovery: ${data.session_errors.map((item) => item.session_id).join(", ")}. Their saves have not been reset.`;
+    }
     confederateSessions = Array.isArray(data.sessions) ? data.sessions : [];
     if (
       confederateSelectedSessionId &&
@@ -694,7 +743,10 @@ async function fetchConfederateSessions() {
     renderConfederateSessions();
     renderConfederateChat();
   } catch (error) {
-    console.warn("Could not load confederate sessions:", error);
+    operatorStatus.textContent = "Connection lost. Showing the last received activity; reconnecting...";
+    operatorStatus.dataset.offline = "true";
+  } finally {
+    confederatePollInFlight = false;
   }
 }
 
@@ -715,7 +767,7 @@ function updateGamePanel() {
   if (roundTotalEl) roundTotalEl.textContent = String(GAME_TOTAL_ROUNDS);
   if (roundPotEl) roundPotEl.textContent = String(GAME_ROUND_POT);
   if (bankTotalEl) bankTotalEl.textContent = String(gameBank);
-  if (roundPhaseEl) roundPhaseEl.textContent = gameComplete ? "Complete" : gamePhase;
+  if (roundPhaseEl) roundPhaseEl.textContent = gamePhase;
 }
 
 function applyGameState(data) {
@@ -731,16 +783,18 @@ function applyGameState(data) {
 }
 
 async function syncParticipantGameState() {
+  const epoch = sessionEpoch;
   if (!conversationSessionId) return;
-  const res = await fetch(`/api/session-state/${encodeURIComponent(conversationSessionId)}`);
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || res.statusText || "Could not refresh game state");
+  const data = await apiJSON(`/api/session-state/${encodeURIComponent(conversationSessionId)}`);
+  assertCurrentSession(epoch);
   applyGameState(data);
 }
 
 function getInitialAvatarKey() {
   const params = new URLSearchParams(window.location.search);
-  const requested = params.get("avatar") || window.localStorage.getItem(AVATAR_STORAGE_KEY);
+  let stored;
+  try { stored = window.localStorage.getItem(AVATAR_STORAGE_KEY); } catch (_) {}
+  const requested = params.get("avatar") || stored;
   return Object.prototype.hasOwnProperty.call(AVATARS, requested) ? requested : "male";
 }
 
@@ -756,7 +810,7 @@ function updateAvatarButtonsState() {
   avatarChoiceBtns.forEach((button) => {
     const key = button.dataset.avatar || "";
     const isActive = key === currentAvatarKey;
-    button.disabled = requestInFlight || isActive;
+    button.disabled = requestInFlight || sessionPaused || isActive;
     button.classList.toggle("active", isActive);
   });
 }
@@ -766,7 +820,7 @@ function persistSessionId(sessionId) {
 }
 
 function normalizeParticipantId(rawValue) {
-  return (rawValue || "").trim().replace(/\s+/g, "").toUpperCase();
+  return (rawValue || "").trim();
 }
 
 function setParticipantError(message) {
@@ -774,28 +828,33 @@ function setParticipantError(message) {
 }
 
 function setParticipantActive(sessionId) {
+  sessionEpoch += 1;
   conversationSessionId = sessionId;
   participantActive = true;
-  currentInteractionMode = "ai";
+  sessionPaused = true;
+  pendingInteraction = readPendingInteraction();
   gameRound = 1;
   gameBank = 0;
   gameComplete = false;
-  gamePhase = "Ready";
+  gamePhase = "Connecting";
   dialogueHistory = loadDialogueHistory(sessionId);
   appEl?.classList.remove("needs-login");
   if (participantLabel) participantLabel.textContent = `Participant ID: ${sessionId}`;
   setParticipantError("");
   renderDialogueHistory();
-  updateModeButtonsState();
   updateGamePanel();
-  registerParticipantSession().then(() => getAssignedInteractionMode());
-  setStatus(avatarReady ? "Session ready." : "Loading avatar...");
-  updateSpeakButtonState();
-  updateSendButtonState();
-  window.setTimeout(() => chatInput?.focus(), 0);
+  reconnectSession();
 }
 
 function resetParticipant() {
+  cancelReplyAudio?.();
+  if (humanTypingTimer) window.clearTimeout(humanTypingTimer);
+  lastHumanTypingText = "";
+  sessionEpoch += 1;
+  requestInFlight = false;
+  sessionPaused = false;
+  pendingInteraction = null;
+  recoveryPanel.hidden = true;
   if (voiceModeEnabled) setVoiceModeEnabled(false);
   conversationSessionId = null;
   participantActive = false;
@@ -1927,11 +1986,8 @@ async function initAvatar() {
   model.visible = true;
   frameBust(model);
 
-  setStatus(
-    hasLipSyncTargets()
-      ? `Avatar ready. Tap Speak to start continuous voice mode.${exportedPose ? ` Female pose tracks=${exportedPose.tracks} applied=${exportedPose.applied} time=${exportedPose.time.toFixed(3)}s.` : ""}`
-      : `Avatar loaded. Tap Speak to start continuous voice mode.${exportedPose ? ` Female pose tracks=${exportedPose.tracks} applied=${exportedPose.applied} time=${exportedPose.time.toFixed(3)}s.` : ""}`
-  );
+  if (!participantActive) setStatus("Avatar ready.");
+  else if (!sessionPaused && !requestInFlight && !gameComplete) setStatus("Session ready.");
   avatarReady = true;
   updateSpeakButtonState();
   updateSendButtonState();
@@ -2298,6 +2354,7 @@ function computeLipSyncTarget(delta) {
 let lipDrivenByAudio = false;
 const clock = new THREE.Clock();
 let avatarReady = false;
+let avatarLoading = null;
 let voiceModeEnabled = false;
 let recognitionListening = false;
 let requestInFlight = false;
@@ -2315,7 +2372,16 @@ let confederatePollTimer = null;
 let confederateSessions = [];
 let confederateSelectedSessionId = "";
 let confederateChatSignature = "";
+let confederateListSignature = "";
 const confederateDrafts = new Map();
+const confederateChoices = new Map();
+const confederateCards = new Map();
+const confederateSubmissions = new Set();
+let confederatePollInFlight = false;
+let sessionPaused = false;
+let sessionEpoch = 0;
+let pendingInteraction = null;
+let cancelReplyAudio = null;
 let humanTypingTimer = null;
 let lastHumanTypingText = "";
 let pendingParticipantId = "";
@@ -2475,7 +2541,7 @@ function updateSpeakButtonState() {
     return;
   }
 
-  speakBtn.disabled = !avatarReady || !participantActive;
+  speakBtn.disabled = !avatarReady || !participantActive || sessionPaused || requestInFlight || gameComplete;
   speakBtn.textContent = voiceModeEnabled ? "Stop speaking" : "Speak";
   speakBtn.classList.toggle("listening", voiceModeEnabled);
   updateAvatarButtonsState();
@@ -2483,9 +2549,9 @@ function updateSpeakButtonState() {
 
 function updateSendButtonState() {
   if (!sendBtn || !chatInput) return;
-  sendBtn.disabled = !avatarReady || !participantActive || requestInFlight || !chatInput.value.trim();
+  sendBtn.disabled = !avatarReady || !participantActive || sessionPaused || requestInFlight || gameComplete || !chatInput.value.trim();
   gameChoiceBtns.forEach((button) => {
-    button.disabled = !avatarReady || !participantActive || requestInFlight || gameComplete;
+    button.disabled = !avatarReady || !participantActive || sessionPaused || requestInFlight || gameComplete;
   });
   updateAvatarButtonsState();
 }
@@ -2501,7 +2567,7 @@ function scheduleListeningRestart(delay = 350) {
   if (!voiceModeEnabled) return;
   listenRestartTimer = window.setTimeout(() => {
     listenRestartTimer = null;
-    if (!voiceModeEnabled || requestInFlight || lipDrivenByAudio || recognitionListening) return;
+    if (!voiceModeEnabled || sessionPaused || requestInFlight || gameComplete || lipDrivenByAudio || recognitionListening) return;
     startVoiceRecognition();
   }, delay);
 }
@@ -2531,10 +2597,18 @@ async function playReplyAudio(base64, mime, mouthCues = []) {
   lipDrivenByAudio = true;
   resetLipSync();
 
+  let settled = false;
+  let watchdog;
   const cleanupAudio = () => {
+    if (settled) return;
+    settled = true;
+    clearTimeout(watchdog);
+    audio.pause();
+    audio.onended = audio.onerror = null;
     endLipSyncDebug();
     lipDrivenByAudio = false;
     currentReplyAudio = null;
+    cancelReplyAudio = null;
     visemeCues = [];
     visemeCueIndex = 0;
     resetLipSync();
@@ -2545,6 +2619,12 @@ async function playReplyAudio(base64, mime, mouthCues = []) {
   };
 
   await new Promise((resolve, reject) => {
+    watchdog = setTimeout(() => { cleanupAudio(); reject(new Error("Audio playback timed out. Resume to retry.")); }, 180000);
+    cancelReplyAudio = () => {
+      audio.pause();
+      cleanupAudio();
+      reject(new Error("Session changed."));
+    };
     audio.onended = () => {
       cleanupAudio();
       if (voiceModeEnabled) {
@@ -2558,7 +2638,7 @@ async function playReplyAudio(base64, mime, mouthCues = []) {
     };
     audioCtx
       .resume()
-      .then(() => audio.play())
+      .then(() => { if (!settled) return audio.play(); })
       .catch((error) => {
         cleanupAudio();
         reject(error);
@@ -2576,310 +2656,316 @@ function queueHumanTypingUpdate(text) {
   if (nextText === lastHumanTypingText) return;
   lastHumanTypingText = nextText;
   if (humanTypingTimer) window.clearTimeout(humanTypingTimer);
+  const sessionId = conversationSessionId;
+  const epoch = sessionEpoch;
   humanTypingTimer = window.setTimeout(async () => {
+    if (epoch !== sessionEpoch || !participantActive) return;
     try {
-      await fetch("/api/human-typing", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          session_id: conversationSessionId,
-          text: lastHumanTypingText,
-        }),
-      });
+      await apiJSON("/api/human-typing", {
+        method: "POST", body: JSON.stringify({ session_id: sessionId, text: nextText }),
+      }, 10000);
     } catch (error) {
       console.warn("Could not send typing update:", error);
     }
   }, 180);
 }
 
-async function waitForHumanResult(messageId) {
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < HUMAN_POLL_TIMEOUT_MS) {
-    const res = await fetch(`/api/human-result/${encodeURIComponent(conversationSessionId)}/${encodeURIComponent(messageId)}`);
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      throw new Error(data.error || res.statusText || "Human interaction failed");
+async function apiJSON(url, options = {}, timeout = 65000) {
+  const response = await fetch(url, {
+    ...options, headers: { "Content-Type": "application/json", ...options.headers },
+    signal: AbortSignal.timeout(timeout),
+  });
+  const data = await response.json().catch(() => null);
+  if (!data || typeof data !== "object") throw new Error("The server response was interrupted. Reconnect to continue.");
+  if (!response.ok) {
+    const error = new Error(data.error || "The connection failed. Reconnect to continue.");
+    error.data = data;
+    error.status = response.status;
+    throw error;
+  }
+  return data;
+}
+
+function pendingStorageKey() {
+  return `finalanim_pending_${conversationSessionId}`;
+}
+
+function readPendingInteraction() {
+  try {
+    const key = pendingStorageKey();
+    const raw = window.sessionStorage.getItem(key) || window.localStorage.getItem(key);
+    const item = JSON.parse(raw || "null");
+    if (!item || !["/api/ask", "/api/split-steal", "/api/human-message", "/api/human-split-steal"].includes(item.endpoint)
+        || item.body?.session_id !== conversationSessionId
+        || !/^[A-Za-z0-9_-]{8,100}$/.test(item.body?.request_id || "")
+        || (item.messageId && item.messageId !== item.body.request_id)) return null;
+    window.sessionStorage.setItem(key, JSON.stringify(item));
+    window.localStorage.removeItem(key);
+    return item;
+  } catch (_) { return null; }
+}
+
+function savePendingInteraction() {
+  if (pendingInteraction) {
+    try { window.sessionStorage.setItem(pendingStorageKey(), JSON.stringify(pendingInteraction)); }
+    catch (_) { throw new Error("Browser storage is unavailable. Enable session storage before continuing."); }
+  } else {
+    try { window.sessionStorage.removeItem(pendingStorageKey()); } catch (_) {}
+  }
+}
+
+async function restoreSessionAvatar(key, epoch) {
+  if (!key || key === currentAvatarKey) return;
+  await avatarLoading;
+  assertCurrentSession(epoch);
+  mixer?.stopAllAction();
+  if (avatarRoot) {
+    scene.remove(avatarRoot);
+    avatarRoot.traverse((node) => {
+      node.geometry?.dispose();
+      const materials = Array.isArray(node.material) ? node.material : [node.material];
+      materials.forEach((material) => material?.dispose());
+    });
+  }
+  Object.keys(actions).forEach((name) => delete actions[name]);
+  actionDrivenBones.clear();
+  avatarReady = false;
+  currentAvatarKey = key;
+  persistAvatarKey(key);
+  avatarLoading = initAvatar();
+  await avatarLoading;
+  assertCurrentSession(epoch);
+  updateAvatarButtonsState();
+}
+
+function interactionFromSummary(item) {
+  const human = item.engine === "human";
+  return {
+    endpoint: item.kind === "choice"
+      ? (human ? "/api/human-split-steal" : "/api/split-steal")
+      : (human ? "/api/human-message" : "/api/ask"),
+    body: {
+      request_id: item.id, session_id: conversationSessionId, avatar: item.avatar || currentAvatarKey,
+      ...(item.kind === "choice"
+        ? { choice: item.participant_choice, expected_round: item.round }
+        : { text: item.participant_text }),
+    },
+    messageId: item.id,
+  };
+}
+
+function pauseSession(message, action = "Reconnect") {
+  sessionPaused = true;
+  stopVoiceRecognition();
+  clearListeningRestartTimer();
+  gamePhase = "Paused";
+  recoveryMessage.textContent = message;
+  recoveryButton.textContent = action;
+  recoveryPanel.hidden = false;
+  setStatus("Session paused. Reconnect to continue.");
+  updateGamePanel();
+  updateSpeakButtonState();
+  updateSendButtonState();
+}
+
+function assertCurrentSession(epoch) {
+  if (epoch !== sessionEpoch || !participantActive) throw new Error("Session changed.");
+}
+
+async function reconnectSession() {
+  if (requestInFlight || !participantActive) return;
+  const epoch = sessionEpoch;
+  requestInFlight = true;
+  sessionPaused = true;
+  recoveryButton.disabled = true;
+  updateSpeakButtonState();
+  updateSendButtonState();
+  try {
+    const session = await registerParticipantSession();
+    assertCurrentSession(epoch);
+    await restoreSessionAvatar(session.avatar, epoch);
+    const history = await apiJSON(`/api/history/${encodeURIComponent(conversationSessionId)}`);
+    assertCurrentSession(epoch);
+    dialogueHistory = (history.dialogue || []).slice(-50).map((turn) => ({
+      type: "message", role: turn.role === "user" ? "You" : "Opponent", text: turn.content,
+      requestId: turn.request_id, at: turn.timestamp,
+    }));
+    saveDialogueHistory();
+    renderDialogueHistory();
+    const outstanding = session.recoverable || [];
+    if (outstanding.length) {
+      const item = outstanding.find((entry) => entry.id === pendingInteraction?.body.request_id) || outstanding[0];
+      if (pendingInteraction?.body.request_id !== item.id) pendingInteraction = interactionFromSummary(item);
+      pendingInteraction.messageId = item.id;
+      savePendingInteraction();
     }
-    if (data.status === "ready") {
-      return data;
+    if (pendingInteraction) {
+      await completeInteraction(epoch);
+    }
+    sessionPaused = false;
+    recoveryPanel.hidden = true;
+    gamePhase = gameComplete ? "Complete" : "Ready";
+    setStatus(gameComplete ? `Session complete. Total bank: $${gameBank}.` : "Session ready.");
+  } catch (error) {
+    if (epoch === sessionEpoch) {
+      if ([400, 409].includes(error.status) && !pendingInteraction?.messageId) {
+        if (pendingInteraction?.body.text && !chatInput.value) chatInput.value = pendingInteraction.body.text;
+        pendingInteraction = null;
+        savePendingInteraction();
+      }
+      pauseSession(error.message || "Could not reconnect.", pendingInteraction ? "Resume response" : "Reconnect");
+    }
+  } finally {
+    if (epoch === sessionEpoch) {
+      requestInFlight = false;
+      recoveryButton.disabled = false;
+      updateGamePanel();
+      updateSpeakButtonState();
+      updateSendButtonState();
+      if (!sessionPaused && voiceModeEnabled) scheduleListeningRestart(420);
+    }
+  }
+}
+
+async function completeInteraction(epoch) {
+  const pending = pendingInteraction;
+  const sid = encodeURIComponent(pending.body.session_id);
+  const id = encodeURIComponent(pending.body.request_id);
+  const base = `/api/interaction/${sid}/${id}`;
+  let data;
+  if (pending.messageId) {
+    data = await apiJSON(base);
+    assertCurrentSession(epoch);
+  }
+  if (!data || data.status === "interrupted") {
+    data = await apiJSON(pending.endpoint, { method: "POST", body: JSON.stringify(pending.body) });
+    assertCurrentSession(epoch);
+    pending.messageId = data.message_id || pending.body.request_id;
+    savePendingInteraction();
+  }
+  const finishCancelled = async () => {
+    pendingInteraction = null;
+    savePendingInteraction();
+    await syncParticipantGameState();
+    assertCurrentSession(epoch);
+    throw new Error("The operator cancelled this response. Reconnect to continue.");
+  };
+  if (data.status === "cancelled") return finishCancelled();
+  const startedAt = Date.now();
+  if (data.status !== "ready") {
+    setStatus("Waiting for your response...");
+    gamePhase = "Waiting";
+    updateGamePanel();
+  }
+  while (data.status !== "ready") {
+    assertCurrentSession(epoch);
+    if (Date.now() - startedAt >= HUMAN_POLL_TIMEOUT_MS) {
+      throw new Error("The response is still pending. Resume to keep waiting for the same response.");
     }
     await delay(HUMAN_POLL_INTERVAL_MS);
+    assertCurrentSession(epoch);
+    data = await apiJSON(base);
+    if (data.status === "cancelled") return finishCancelled();
+    if (data.status === "interrupted") throw new Error("The response was interrupted. Resume to retry safely.");
   }
-  throw new Error("The response took too long. Please try again.");
+  assertCurrentSession(epoch);
+  applyGameState(data);
+  addDialogueEntry({ type: "message", role: "You", text: data.participant_text, requestId: pending.body.request_id });
+  addDialogueEntry({ type: "message", role: "Opponent", text: data.reply || "", requestId: pending.body.request_id });
+  setStatus(data.reply || "Response ready.");
+  if (data.acknowledged) {
+    pendingInteraction = null;
+    savePendingInteraction();
+    await syncParticipantGameState();
+    assertCurrentSession(epoch);
+    return;
+  }
+  if (!pending.presentationDone) {
+    if (!data.audio_base64) {
+      data = await apiJSON(`${base}/audio`, { method: "POST", body: "{}" });
+      assertCurrentSession(epoch);
+    }
+    const audioStartedAt = Date.now();
+    while (data.audio_pending && Date.now() - audioStartedAt < 45000) {
+      await delay(900);
+      assertCurrentSession(epoch);
+      data = await apiJSON(`${base}/audio`, { method: "POST", body: "{}" });
+      assertCurrentSession(epoch);
+    }
+    if (!data.audio_base64) {
+      throw new Error("Your response is saved, but its audio is unavailable. Resume to retry audio without repeating the interaction.");
+    }
+    await avatarLoading;
+    assertCurrentSession(epoch);
+    await playReplyAudio(data.audio_base64, data.audio_mime, data.mouth_cues);
+    assertCurrentSession(epoch);
+    pending.presentationDone = true;
+    savePendingInteraction();
+  }
+  await apiJSON(`${base}/ack`, { method: "POST", body: JSON.stringify({ presentation: "audio" }) });
+  assertCurrentSession(epoch);
+  pendingInteraction = null;
+  savePendingInteraction();
+  await syncParticipantGameState();
+  assertCurrentSession(epoch);
 }
 
-async function sendHumanTranscript(text) {
-  const cleanedText = (text || "").trim();
-  if (!cleanedText || requestInFlight || !participantActive || !conversationSessionId) return;
-
-  if (recognitionListening) {
-    stopVoiceRecognition();
-  }
-
-  setTranscript(cleanedText);
-  setStatus("Processing your message...");
-  gamePhase = "Waiting";
-  updateGamePanel();
+async function sendInteraction(kind, value) {
+  if (requestInFlight || sessionPaused || !participantActive || !conversationSessionId || gameComplete) return;
+  const epoch = sessionEpoch;
   requestInFlight = true;
+  stopVoiceRecognition();
   updateSpeakButtonState();
   updateSendButtonState();
-
   try {
-    addDialogueEntry({ type: "message", role: "You", text: cleanedText });
-    const res = await fetch("/api/human-message", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        text: cleanedText,
-        session_id: conversationSessionId || undefined,
-        avatar: currentAvatarKey,
-      }),
-    });
-    const queued = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      throw new Error(queued.error || res.statusText || "Request failed");
-    }
-    if (typeof queued.session_id === "string" && queued.session_id.trim()) {
-      persistSessionId(queued.session_id.trim());
-    }
-
-    setStatus("Preparing response...");
-    const data = await waitForHumanResult(queued.message_id);
-    addDialogueEntry({ type: "message", role: "Opponent", text: data.reply || "" });
-    setStatus(data.reply || "");
-    if (data.audio_base64) {
-      await playReplyAudio(data.audio_base64, data.audio_mime, data.mouth_cues);
-    }
-    gamePhase = "Ready";
-    updateGamePanel();
-  } catch (e) {
-    setStatus(String(e.message || e));
-    gamePhase = "Ready";
-    updateGamePanel();
-  } finally {
-    requestInFlight = false;
-    updateSpeakButtonState();
-    updateSendButtonState();
-    if (voiceModeEnabled && !lipDrivenByAudio) {
-      scheduleListeningRestart(420);
-    }
-  }
-}
-
-async function sendTranscript(text) {
-  const cleanedText = (text || "").trim();
-  if (!cleanedText || requestInFlight || !participantActive || !conversationSessionId) return;
-
-  if (recognitionListening) {
-    stopVoiceRecognition();
-  }
-
-  setTranscript(cleanedText);
-  setStatus("Thinking…");
-  requestInFlight = true;
-  updateSpeakButtonState();
-  updateSendButtonState();
-
-  try {
-    const res = await fetch("/api/ask", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        text: cleanedText,
-        session_id: conversationSessionId || undefined,
-        avatar: currentAvatarKey,
-      }),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      throw new Error(data.error || res.statusText || "Request failed");
-    }
-
-    if (typeof data.session_id === "string" && data.session_id.trim()) {
-      persistSessionId(data.session_id.trim());
-    }
-
-    setStatus(data.reply || "");
-    addDialogueEntry({ type: "message", role: "You", text: cleanedText });
-    addDialogueEntry({ type: "message", role: "Assistant", text: data.reply || "" });
-    if (data.audio_base64) {
-      await playReplyAudio(data.audio_base64, data.audio_mime, data.mouth_cues);
-      if (!voiceModeEnabled) {
-        setStatus("Tap Speak to start continuous voice mode.");
-      }
-    }
-  } catch (e) {
-    setStatus(String(e.message || e));
-  } finally {
-    requestInFlight = false;
-    updateSpeakButtonState();
-    updateSendButtonState();
-    if (voiceModeEnabled && !lipDrivenByAudio) {
-      scheduleListeningRestart(420);
-    }
-  }
-}
-
-async function sendSplitStealChoice(choice) {
-  const normalizedChoice = (choice || "").trim().toLowerCase();
-  if (!["split", "steal"].includes(normalizedChoice) || requestInFlight || !participantActive || !conversationSessionId || gameComplete) return;
-
-  if (recognitionListening) {
-    stopVoiceRecognition();
-  }
-
-  setTranscript(`I choose ${normalizedChoice}.`);
-  setStatus(`Round ${gameRound}: choice locked. Processing...`);
-  gamePhase = "Waiting";
-  updateGamePanel();
-  requestInFlight = true;
-  updateSpeakButtonState();
-  updateSendButtonState();
-
-  try {
-    const res = await fetch("/api/split-steal", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        choice: normalizedChoice,
-        expected_round: gameRound,
-        session_id: conversationSessionId || undefined,
-        avatar: currentAvatarKey,
-      }),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      if (data && (data.round !== undefined || data.complete !== undefined)) {
-        applyGameState(data);
-      }
-      throw new Error(data.error || res.statusText || "Request failed");
-    }
-
-    if (typeof data.session_id === "string" && data.session_id.trim()) {
-      persistSessionId(data.session_id.trim());
-    }
-
-    applyGameState(data);
-
-    setStatus(gameComplete ? `Session complete. Total bank: $${gameBank}.` : data.reply || "Round complete.");
-    addDialogueEntry({
-      type: "split-steal",
-      userChoice: data.user_choice || normalizedChoice,
-      assistantChoice: data.assistant_choice || "unknown",
-      outcome: data.outcome || "",
-      outcomeText: getOutcomeText(data.outcome),
-      reply: data.reply || "",
-    });
-    if (data.audio_base64) {
-      await playReplyAudio(data.audio_base64, data.audio_mime, data.mouth_cues);
-      if (!voiceModeEnabled && !gameComplete) {
-        setStatus(`Round ${gameRound} ready. Pot is $${Number(data.pot ?? GAME_ROUND_POT)}.`);
-      }
-    }
-  } catch (e) {
-    setStatus(String(e.message || e));
-    try {
-      await syncParticipantGameState();
-    } catch (syncError) {
-      console.warn("Could not refresh game state after failed choice:", syncError);
-      gamePhase = "Ready";
-      updateGamePanel();
-    }
-  } finally {
-    requestInFlight = false;
-    updateSpeakButtonState();
-    updateSendButtonState();
-    if (voiceModeEnabled && !lipDrivenByAudio) {
-      scheduleListeningRestart(420);
-    }
-  }
-}
-
-async function sendHumanSplitStealChoice(choice) {
-  const normalizedChoice = (choice || "").trim().toLowerCase();
-  if (!["split", "steal"].includes(normalizedChoice) || requestInFlight || !participantActive || !conversationSessionId || gameComplete) return;
-
-  if (recognitionListening) {
-    stopVoiceRecognition();
-  }
-
-  setTranscript(`I choose ${normalizedChoice}.`);
-  setStatus(`Round ${gameRound}: choice locked. Processing...`);
-  gamePhase = "Waiting";
-  updateGamePanel();
-  requestInFlight = true;
-  updateSpeakButtonState();
-  updateSendButtonState();
-
-  try {
-    const res = await fetch("/api/human-split-steal", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        choice: normalizedChoice,
-        session_id: conversationSessionId || undefined,
-        avatar: currentAvatarKey,
-      }),
-    });
-    const queued = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      throw new Error(queued.error || res.statusText || "Request failed");
-    }
-
-    setStatus("Processing round...");
-    const data = await waitForHumanResult(queued.message_id);
-    gameBank = Number(data.bank || gameBank);
-    gameComplete = !!data.complete;
-    gameRound = gameComplete ? GAME_TOTAL_ROUNDS : Math.min(GAME_TOTAL_ROUNDS, Number(data.round || gameRound) + 1);
-    gamePhase = gameComplete ? "Complete" : "Ready";
-    updateGamePanel();
-
-    addDialogueEntry({
-      type: "human-choice",
-      userChoice: data.participant_choice || normalizedChoice,
-      confederateChoice: data.confederate_choice || "unknown",
-      outcome: data.outcome || "",
-      outcomeText: getOutcomeText(data.outcome),
-      reply: data.reply || "",
-    });
-
-    setStatus(data.complete ? `Session complete. Total bank: $${gameBank}.` : data.reply || "Round complete.");
-    if (data.audio_base64) {
-      await playReplyAudio(data.audio_base64, data.audio_mime, data.mouth_cues);
-      if (!data.complete) {
-        setStatus(`Round ${gameRound} ready. Pot is $${GAME_ROUND_POT}.`);
-      }
-    }
-  } catch (e) {
-    setStatus(String(e.message || e));
-    gamePhase = "Ready";
-    updateGamePanel();
-  } finally {
-    requestInFlight = false;
-    updateSpeakButtonState();
-    updateSendButtonState();
-    if (voiceModeEnabled && !lipDrivenByAudio) {
-      scheduleListeningRestart(420);
-    }
-  }
-}
-
-async function sendRoutedTranscript(text) {
-  const mode = await getAssignedInteractionMode();
-  if (mode === "human") {
+    const mode = await getAssignedInteractionMode();
+    assertCurrentSession(epoch);
+    const human = mode === "human";
+    pendingInteraction = {
+      endpoint: kind === "choice"
+        ? (human ? "/api/human-split-steal" : "/api/split-steal")
+        : (human ? "/api/human-message" : "/api/ask"),
+      body: { session_id: conversationSessionId, request_id: crypto.randomUUID(), avatar: currentAvatarKey,
+        ...(kind === "choice" ? { choice: value, expected_round: gameRound } : { text: value }) },
+    };
+    savePendingInteraction();
+    if (kind === "message") chatInput.value = "";
     queueHumanTypingUpdate("");
-    return sendHumanTranscript(text);
+    gamePhase = "Waiting";
+    updateGamePanel();
+    setStatus("Preparing response...");
+    await completeInteraction(epoch);
+    setStatus(gameComplete ? `Session complete. Total bank: $${gameBank}.` : `Round ${gameRound} ready.`);
+  } catch (error) {
+    if (epoch === sessionEpoch) {
+      // A rejected stale route/round never created this ID; use the server's pending record instead.
+      if ([400, 409].includes(error.status) && !pendingInteraction?.messageId) {
+        if (pendingInteraction?.body.text && !chatInput.value) chatInput.value = pendingInteraction.body.text;
+        pendingInteraction = null;
+        savePendingInteraction();
+      }
+      pauseSession(error.message || "The response was interrupted.", pendingInteraction ? "Resume response" : "Reconnect");
+    }
+  } finally {
+    if (epoch === sessionEpoch) {
+      requestInFlight = false;
+      updateSpeakButtonState();
+      updateSendButtonState();
+      if (!sessionPaused && voiceModeEnabled) scheduleListeningRestart(420);
+    }
   }
-  return sendTranscript(text);
 }
 
-async function sendRoutedSplitStealChoice(choice) {
-  const mode = await getAssignedInteractionMode();
-  if (mode === "human") {
-    return sendHumanSplitStealChoice(choice);
-  }
-  return sendSplitStealChoice(choice);
+function sendRoutedTranscript(text) {
+  const value = (text || "").trim();
+  if (value) return sendInteraction("message", value);
 }
+
+function sendRoutedSplitStealChoice(choice) {
+  if (["split", "steal"].includes(choice)) return sendInteraction("choice", choice);
+}
+
+recoveryButton.addEventListener("click", reconnectSession);
 
 let recognition = null;
 function initVoiceRecognition() {
@@ -3044,7 +3130,6 @@ chatForm?.addEventListener("submit", (event) => {
   const value = chatInput?.value || "";
   if (!value.trim()) return;
   sendRoutedTranscript(value);
-  chatInput.value = "";
   updateSendButtonState();
 });
 
@@ -3091,7 +3176,8 @@ if (currentInteractionMode === "confederate") {
   participantInput?.focus();
 }
 
-initAvatar().catch((error) => {
+avatarLoading = initAvatar();
+avatarLoading.catch((error) => {
   console.error(error);
   setStatus("Could not load avatar or animations. Check the server.");
 });

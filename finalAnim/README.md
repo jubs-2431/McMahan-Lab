@@ -52,8 +52,55 @@ the participant reply routes.
 6. Azure returns 24-kHz WAV audio and timed visemes that drive lip sync.
 
 The operator interface can assign Human, AI, or Unknown routes and monitor recent
-events. Generated session data is stored under `participant_logs/`, which is
-ignored by Git.
+activity and transcripts across all routes. Both `/confederate` and
+`/confederate.html` redirect to `/?mode=confederate`. The operator can change a
+route once the current interaction has been presented and acknowledged.
+Generated session data is stored under `participant_logs/`, which is ignored by Git.
+
+## Recovery and persistence
+
+`participant_logs/<ID>/state.json` is the authoritative session snapshot. Atomic
+replacement saves the assigned route, round, bank, full transcript, events, and
+pending/resolved interactions together. A restart restores this snapshot; model
+context still uses only the configured recent turns. Keep the same assigned ID
+to resume a session. Use a different assigned ID for a new participant.
+
+The participant page stores the outgoing request ID before sending. Refreshing,
+reconnecting, or choosing **Resume response** uses that same interaction. A
+completed response is saved before speech synthesis. If speech fails, the UI
+shows the saved reply and pauses; resume retries its audio without regenerating
+the reply or awarding another payout. Controls unlock after playback and a
+successful acknowledgement. Human waiting times out after three minutes with a
+resume action; it does not create another queue item. Route lookup failures also
+pause the session rather than defaulting to AI.
+
+Old event logs and JSON exports are imported when no `state.json` exists. Recovery
+can only restore information that the older version recorded. In particular,
+legacy pending records do not include the avatar, and legacy resolved responses
+have no playback acknowledgement; the importer uses the male avatar for those
+pending records and treats previously resolved legacy responses as delivered.
+An invalid authoritative save produces an error instead of resetting progress.
+Run only one server process against a given log directory; the session lock is
+process-local.
+
+## Research exports
+
+`dialogue.json`, `split_steal_rounds.json`, `session.json`, and `events.jsonl` are
+readable exports of the saved snapshot. Older records retain their original
+fields. New records use schema version 2. Each new round has the same fields in
+Human, AI, and Unknown routes: participant ID, request ID, assigned mode, actual
+engine, round, participant/assistant choices, outcome, payout, bank, pot,
+timestamp, avatar, model, and voice. The model is null for Human interactions.
+Outcome values are `tie`, `user_wins`, `assistant_wins`, and `no_one_wins` in all
+routes. `split_steal` is the canonical round event; the corresponding
+`ai_choice_resolved` / `human_choice_resolved` events describe the same round and
+must not be counted as extra rounds. `response_presented` records acknowledgement
+after browser playback. Event timestamps describe server events, not precise
+human response-time measurements.
+
+Exports are refreshed after the authoritative save. If an export write fails,
+the server logs the error and retains the saved snapshot; the next successful
+session write refreshes the exports.
 
 Current limitations:
 
@@ -79,8 +126,33 @@ Current limitations:
   not prove that they authenticate successfully.
 - `POST /api/viseme-demo-speak` accepts `text` and `avatar` and returns WAV audio
   plus Azure `mouth_cues` for integration testing.
-- `GET /api/history/<session_id>` returns stored dialogue and AI-route game rounds.
+- `GET /api/history/<session_id>` returns the full stored dialogue and round history.
+- New interactions accept a stable `request_id`; choices also require
+  `expected_round`. Reusing an ID with different inputs returns HTTP 409.
+- `GET /api/interaction/<session_id>/<message_id>` retrieves the saved response
+  or waiting/interrupted status without generating audio.
+- `POST /api/interaction/<session_id>/<message_id>/audio` retries speech for the
+  saved response. A speech error leaves the response intact.
+- `POST /api/interaction/<session_id>/<message_id>/ack` with
+  `{"presentation":"audio"}` confirms playback. Until acknowledgement, another
+  interaction or a route change is rejected.
+
+## Regression checks
+
+```bash
+.venv/bin/python -m unittest -v test_game_state.py test_recovery.py test_backend_edges.py
+node --input-type=module --check < main.js
+```
+
+The tests use temporary log directories and mocked providers, without contacting
+OpenAI/Azure or modifying participant records.
 
 This is a localhost research prototype, not a production deployment. Do not
 expose it directly to a network without authentication, transport security, and
 an approved research-data plan.
+
+Recovery guarantees: canonical saves are validated before use; invalid saves are rejected without resetting progress. Failed writes restore the last committed in-memory snapshot. Per-session locks keep another participant’s disk writes from blocking requests; operator polling uses the last saved summary while a session is busy. Run one server per log directory (the launcher process holds an exclusive file lock).
+
+Speech runs in a child process with a 30-second timeout and a four-worker limit. Pending audio is polled by the browser; a failed synthesis can be retried without another payout or model response. Browser recovery uses per-tab session storage and stable request IDs. Rejoining restores the saved avatar and transcript. Completed sessions reject both chat and choices.
+
+Operators can cancel an uncompleted response with a logged reason using the dashboard or `POST /api/confederate/cancel` (`session_id`, `message_id`, `reason`). Cancellation prevents late model results from committing; completed payouts cannot be cancelled.

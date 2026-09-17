@@ -3,6 +3,7 @@ import os
 import tempfile
 import threading
 import unittest
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
@@ -51,7 +52,7 @@ class SplitStealStateTest(unittest.TestCase):
             for expected_round in range(1, 8):
                 response = self.client.post(
                     "/api/split-steal",
-                    json={"choice": "split", "expected_round": expected_round, "session_id": "TEST_AI_STATE"},
+                    json={"choice": "split", "expected_round": expected_round, "session_id": "TEST_AI_STATE", "request_id": uuid.uuid4().hex},
                 )
                 self.assertEqual(response.status_code, 200)
                 data = response.get_json()
@@ -61,16 +62,21 @@ class SplitStealStateTest(unittest.TestCase):
                 self.assertEqual(data["payout"], 50)
                 self.assertEqual(data["bank"], expected_round * 50)
                 self.assertEqual(data["complete"], expected_round == 7)
+                acknowledged = self.client.post(
+                    f'/api/interaction/TEST_AI_STATE/{data["message_id"]}/ack',
+                    json={"presentation": "test"},
+                )
+                self.assertEqual(acknowledged.status_code, 200)
 
             rejected = self.client.post(
                 "/api/split-steal",
-                json={"choice": "split", "expected_round": 7, "session_id": "TEST_AI_STATE"},
+                json={"choice": "split", "expected_round": 7, "session_id": "TEST_AI_STATE", "request_id": uuid.uuid4().hex},
             )
             self.assertEqual(rejected.status_code, 400)
             self.assertEqual(rejected.get_json()["error"], "All rounds are complete.")
 
         restored = self.client.post(
-            "/api/session-register", json={"session_id": "TEST_AI_STATE"}
+            "/api/session-register", json={"session_id": "TEST_AI_STATE", "request_id": uuid.uuid4().hex}
         ).get_json()
         self.assertEqual(restored["bank"], 350)
         self.assertTrue(restored["complete"])
@@ -101,7 +107,7 @@ class SplitStealStateTest(unittest.TestCase):
                 ):
                     response = self.client.post(
                         "/api/split-steal",
-                        json={"choice": participant_choice, "expected_round": 1, "session_id": f"PAYOUT_{index}"},
+                        json={"choice": participant_choice, "expected_round": 1, "session_id": f"PAYOUT_{index}", "request_id": uuid.uuid4().hex},
                     )
 
                 data = response.get_json()
@@ -114,11 +120,11 @@ class SplitStealStateTest(unittest.TestCase):
         with patch.dict(os.environ, {}, clear=True):
             first = self.client.post(
                 "/api/split-steal",
-                json={"choice": "steal", "expected_round": 1, "session_id": "TEST_UNLOCK"},
+                json={"choice": "steal", "expected_round": 1, "session_id": "TEST_UNLOCK", "request_id": "retry_same_choice"},
             )
             second = self.client.post(
                 "/api/split-steal",
-                json={"choice": "steal", "expected_round": 1, "session_id": "TEST_UNLOCK"},
+                json={"choice": "steal", "expected_round": 1, "session_id": "TEST_UNLOCK", "request_id": "retry_same_choice"},
             )
 
         self.assertEqual(first.status_code, 500)
@@ -142,7 +148,7 @@ class SplitStealStateTest(unittest.TestCase):
             with server.app.test_client() as client:
                 return client.post(
                     "/api/split-steal",
-                    json={"choice": "split", "expected_round": 1, "session_id": "TEST_DUPLICATE"},
+                    json={"choice": "split", "expected_round": 1, "session_id": "TEST_DUPLICATE", "request_id": uuid.uuid4().hex},
                 )
 
         with (
@@ -196,7 +202,7 @@ class SplitStealStateTest(unittest.TestCase):
         ):
             response = self.client.post(
                 "/api/split-steal",
-                json={"choice": "steal", "expected_round": 1, "session_id": "TEST_UNKNOWN"},
+                json={"choice": "steal", "expected_round": 1, "session_id": "TEST_UNKNOWN", "request_id": uuid.uuid4().hex},
             )
 
         data = response.get_json()
