@@ -36,7 +36,8 @@ class RecoveryTest(unittest.TestCase):
         self.addCleanup(self.env.stop)
         self.model = Mock()
         self.model.chat.completions.create.return_value = SimpleNamespace(
-            choices=[SimpleNamespace(message=SimpleNamespace(content="Split"))])
+            choices=[SimpleNamespace(finish_reason="stop", message=SimpleNamespace(
+                content='{"choice":"split"}', refusal=None))])
         self.ai_patch = patch.object(server, "OpenAI", return_value=self.model)
         self.ai_patch.start()
         self.addCleanup(self.ai_patch.stop)

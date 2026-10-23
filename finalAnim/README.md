@@ -59,6 +59,18 @@ Generated session data is stored under `participant_logs/`, which is ignored by 
 
 ## Recovery and persistence
 
+Every AI reply receives the current round, pot, bank, and completed results from
+the saved game state. Basic instructions keep chat brief, explain the real
+payout rules, avoid promising an unchosen move, and prevent invented results or
+extra rounds. Round 1 permits a brief introduction; rounds 2-6 continue normally;
+round 7 is explicitly the final round. These are model instructions, not a
+guarantee of perfect wording; the server remains responsible for moves/payouts.
+
+AI game moves use a strict JSON schema with only `split` and `steal` allowed.
+An invalid, incomplete, or refused move response is retried once automatically.
+If both attempts fail, the session pauses with its round and bank unchanged;
+**Resume response** retries that same interaction. No default move is substituted.
+
 `participant_logs/<ID>/state.json` is the authoritative session snapshot. Atomic
 replacement saves the assigned route, round, bank, full transcript, events, and
 pending/resolved interactions together. A restart restores this snapshot; model
@@ -140,7 +152,7 @@ Current limitations:
 ## Regression checks
 
 ```bash
-.venv/bin/python -m unittest -v test_game_state.py test_recovery.py test_backend_edges.py
+.venv/bin/python -m unittest -v test_game_state.py test_recovery.py test_backend_edges.py test_ai_moves.py
 node --input-type=module --check < main.js
 ```
 

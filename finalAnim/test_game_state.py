@@ -30,7 +30,8 @@ class SplitStealStateTest(unittest.TestCase):
     @staticmethod
     def _completion(choice):
         return SimpleNamespace(
-            choices=[SimpleNamespace(message=SimpleNamespace(content=choice))]
+            choices=[SimpleNamespace(finish_reason="stop", message=SimpleNamespace(
+                content=json.dumps({"choice": choice.lower()}), refusal=None))]
         )
 
     def test_ai_round_bank_and_completion_state(self):
