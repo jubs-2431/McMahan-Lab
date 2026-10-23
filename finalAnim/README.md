@@ -6,6 +6,11 @@ confederate route.
 
 ## Quick start
 
+Windows: follow [WINDOWS-SETUP.md](WINDOWS-SETUP.md), or double-click
+`start-windows.bat` after installing Python 3.12 x64 and downloading Git LFS assets.
+The server uses Windows byte-range locking on Windows and `flock` on macOS/Linux.
+
+
 Requirements:
 
 - Python 3.9+
@@ -152,7 +157,7 @@ Current limitations:
 ## Regression checks
 
 ```bash
-.venv/bin/python -m unittest -v test_game_state.py test_recovery.py test_backend_edges.py test_ai_moves.py
+.venv/bin/python -m unittest -v test_game_state.py test_recovery.py test_backend_edges.py test_ai_moves.py test_platform_lock.py test_windows_startup.py
 node --input-type=module --check < main.js
 ```
 

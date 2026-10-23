@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import base64
 import copy
-import fcntl
 import subprocess
 import sys
 import io
@@ -24,6 +23,7 @@ from dotenv import load_dotenv
 from flask import Flask, jsonify, redirect, request, send_from_directory
 from openai import OpenAI
 from state_validation import InvalidSession, validate_session
+from platform_lock import acquire_log_lock
 
 load_dotenv()
 
@@ -1236,14 +1236,7 @@ def history(session_id):
 
 
 def _acquire_log_lock():
-    LOG_ROOT.mkdir(parents=True, exist_ok=True)
-    handle = (LOG_ROOT / ".server.lock").open("a+")
-    try:
-        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except OSError:
-        handle.close()
-        raise RuntimeError("Another finalAnim server is already using this log directory.")
-    return handle
+    return acquire_log_lock(LOG_ROOT)
 
 
 

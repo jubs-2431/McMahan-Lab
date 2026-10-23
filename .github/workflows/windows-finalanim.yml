@@ -1,0 +1,38 @@
+name: finalAnim Windows
+on:
+  push:
+    paths:
+      - 'finalAnim/**'
+      - '.github/workflows/windows-finalanim.yml'
+  pull_request:
+    paths:
+      - 'finalAnim/**'
+      - '.github/workflows/windows-finalanim.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: finalAnim
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install backend dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Backend, locking, HTTP startup and avatar asset tests
+        run: python -B -m unittest -v test_game_state.py test_recovery.py test_backend_edges.py test_ai_moves.py test_platform_lock.py test_windows_startup.py
+      - name: Serial marker and presentation tests
+        run: node --test test_serial_markers.mjs
+      - name: Frontend syntax
+        shell: bash
+        run: node --input-type=module --check < main.js

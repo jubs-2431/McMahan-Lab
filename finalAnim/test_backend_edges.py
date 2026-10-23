@@ -122,14 +122,19 @@ class BackendEdges(unittest.TestCase):
 
     def test_speech_timeout_kills_worker_and_releases_capacity(self):
         worker = server.LOG_ROOT / 'sleep_worker.py'
-        pidfile = server.LOG_ROOT / 'pid'
-        worker.write_text('import os,time\nfrom pathlib import Path\nPath('+repr(str(pidfile))+').write_text(str(os.getpid()))\ntime.sleep(60)\n')
+        worker.write_text('import time\ntime.sleep(60)\n')
         slots = threading.BoundedSemaphore(1)
-        with patch.object(server,'SPEECH_WORKER',worker), patch.object(server,'SPEECH_TIMEOUT_SECONDS',0.3), patch.object(server,'SPEECH_SLOTS',slots), patch.dict(os.environ,{'AZURE_SPEECH_KEY':'test','AZURE_SPEECH_REGION':'test'}):
+        processes = []
+        real_popen = server.subprocess.Popen
+        def capture_process(*args, **kwargs):
+            process = real_popen(*args, **kwargs)
+            processes.append(process)
+            return process
+        with patch.object(server,'SPEECH_WORKER',worker), patch.object(server,'SPEECH_TIMEOUT_SECONDS',0.3), patch.object(server,'SPEECH_SLOTS',slots), patch.dict(os.environ,{'AZURE_SPEECH_KEY':'test','AZURE_SPEECH_REGION':'test'}), patch.object(server.subprocess,'Popen',side_effect=capture_process):
             with self.assertRaisesRegex(RuntimeError,'timed out'):
                 REAL_SPEECH('hello','voice')
-        with self.assertRaises(ProcessLookupError):
-            os.kill(int(pidfile.read_text()),0)
+        self.assertEqual(len(processes), 1)
+        self.assertIsNotNone(processes[0].poll(), "Timed-out worker is still running")
         self.assertTrue(slots.acquire(blocking=False))
         slots.release()
 
