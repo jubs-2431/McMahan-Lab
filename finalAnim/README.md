@@ -168,3 +168,53 @@ Recovery guarantees: canonical saves are validated before use; invalid saves are
 Speech runs in a child process with a 30-second timeout and a four-worker limit. Pending audio is polled by the browser; a failed synthesis can be retried without another payout or model response. Browser recovery uses per-tab session storage and stable request IDs. Rejoining restores the saved avatar and transcript. Completed sessions reject both chat and choices.
 
 Operators can cancel an uncompleted response with a logged reason using the dashboard or `POST /api/confederate/cancel` (`session_id`, `message_id`, `reason`). Cancellation prevents late model results from committing; completed payouts cannot be cancelled.
+
+
+## Serial EEG markers (no LSL)
+
+Participant interactions require the shared protocol-v2 marker bridge from
+[Myssttx/driver-moral-simulator](https://github.com/Myssttx/driver-moral-simulator).
+Run it on the **participant browser computer**, with LSL disabled:
+
+```bash
+python3 python/marker_bridge.py --list-serial-ports
+python3 python/marker_bridge.py --serial-port YOUR_SENDER_PORT --disable-lsl
+```
+
+The reference repo does **not** specify a fixed COM number (`port: null`). Select
+the actual sender endpoint; configure EmotivPRO on the opposite receiver endpoint
+of the serial pair. Both ends use **115200 baud, 8N1, no flow control**. The bridge
+writes one raw uint8 byte per event, with no ASCII conversion or line ending.
+The browser connects to `ws://127.0.0.1:7779/markers`; only the shared bridge
+opens the serial port. Do not run another port writer or manually duplicate
+these automatic round markers in the operator dashboard.
+
+This app uses the reference `driver-serial-v1` codebook, with source
+`operator_dashboard`, for human/AI/unknown conditions respectively:
+
+- Round start at the first interaction: 131 / 132 / 133.
+- Participant split or steal: 138-139 / 142-143 / 146-147.
+- Opponent split or steal when the saved result is received: 140-141 / 144-145 / 148-149.
+- Outcome displayed: 151 / 152 / 153.
+- Round end after audio presentation: 155 / 156 / 157.
+
+Protocol milestones such as consent and session start/end remain manual controls
+in the reference operator dashboard. Browser event timing includes WebSocket
+latency; markers are not hardware-synchronized display-onset timestamps.
+
+Each marker requires an audited ACK with the expected byte code and a one-byte
+`written` result. LSL-enabled bridges and simulation are rejected by default.
+Missing/failed markers pause the interaction. Confirmed markers are remembered
+in this tab's session storage and not replayed on recovery. A sent marker whose
+ACK is lost is marked uncertain and blocks replay: the operator must inspect the
+bridge audit CSV and stop that acquisition run before starting a new run with a
+new participant/session ID. Do not clear storage to continue an uncertain run.
+Use unique IDs per acquisition run and keep the same tab throughout it.
+
+For deliberate simulation, run the bridge with `--serial-simulate --disable-lsl`
+and open the participant page with `?serialMarkers=simulate`. For standalone
+avatar development without acquisition, explicitly use `?serialMarkers=off`.
+A `written` ACK only proves the OS accepted one byte; verify a short test recording
+and the integer marker channel in EmotivPRO before collecting study data.
+
+Serial client checks: `node --test test_serial_markers.mjs`.

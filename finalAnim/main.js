@@ -1,3 +1,4 @@
+import { SerialMarkers } from "/serial-markers.mjs";
 import * as THREE from "three";
 import { DRACOLoader } from "three/addons/loaders/DRACOLoader.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
@@ -26,7 +27,11 @@ const LIP_SYNC_MESH_INCLUDE_PATTERN = /ccbasebody|ccbaseteeth|ccbasetongue|headm
 const LIP_SYNC_EXCLUDE_PATTERN = /(blink|brow|tongue|eye|squint|cheek|nostril|smile|frown|close|press|pucker|purse|funnel|stretch|narrow|roll|tight|suck)/;
 const LIP_SYNC_OPEN_PATTERN = /(jawopen|mouthopen|openjaw|openmouth|vopen|vlipopen)/;
 const LIP_SYNC_VOWEL_PATTERN = /(visemeaa|visemeah|visemeao|visemeoh|visemeou|phonemeaa|phonemeah|phonemeao|phonemeoh|phonemeou|vwide|vtighto)/;
-const BUILD_ID = "20260911-recovery";
+const BUILD_ID = "20261023-serial";
+const serialMarkers = new SerialMarkers({
+  WebSocket: window.WebSocket, storage: window.sessionStorage,
+  mode: new URLSearchParams(window.location.search).get("serialMarkers") || "hardware",
+});
 const PARTICIPANT_ID_PATTERN = /^[A-Za-z0-9_-]{3,80}$/;
 
 const appEl = document.getElementById("app");
@@ -2832,6 +2837,23 @@ async function completeInteraction(epoch) {
   const sid = encodeURIComponent(pending.body.session_id);
   const id = encodeURIComponent(pending.body.request_id);
   const base = `/api/interaction/${sid}/${id}`;
+  if (pending.messageId && !pending.markerContext && serialMarkers.mode !== "off") {
+    throw new Error("This saved interaction has no serial timing history. Operator review is required before starting a new acquisition run.");
+  }
+  await serialMarkers.ready();
+  assertCurrentSession(epoch);
+  const markerContext = { ...(pending.markerContext || {
+    session: pending.body.session_id, round: pending.body.expected_round || gameRound,
+    mode: currentInteractionMode,
+  }), request: pending.body.request_id };
+  if (!pending.messageId) {
+    await serialMarkers.emit("sos_round_start", markerContext);
+    assertCurrentSession(epoch);
+    if (pending.body.choice) {
+      await serialMarkers.emit("sos_choice", { ...markerContext, actor: "participant", choice: pending.body.choice });
+      assertCurrentSession(epoch);
+    }
+  }
   let data;
   if (pending.messageId) {
     data = await apiJSON(base);
@@ -2869,10 +2891,18 @@ async function completeInteraction(epoch) {
     if (data.status === "interrupted") throw new Error("The response was interrupted. Resume to retry safely.");
   }
   assertCurrentSession(epoch);
+  if (pending.body.choice && !data.acknowledged) {
+    await serialMarkers.emit("sos_choice", { ...markerContext, actor: "opponent", choice: data.assistant_choice });
+    assertCurrentSession(epoch);
+  }
   applyGameState(data);
   addDialogueEntry({ type: "message", role: "You", text: data.participant_text, requestId: pending.body.request_id });
   addDialogueEntry({ type: "message", role: "Opponent", text: data.reply || "", requestId: pending.body.request_id });
   setStatus(data.reply || "Response ready.");
+  if (pending.body.choice && !data.acknowledged) {
+    await serialMarkers.emit("sos_outcome_shown", markerContext);
+    assertCurrentSession(epoch);
+  }
   if (data.acknowledged) {
     pendingInteraction = null;
     savePendingInteraction();
@@ -2902,6 +2932,10 @@ async function completeInteraction(epoch) {
     pending.presentationDone = true;
     savePendingInteraction();
   }
+  if (pending.body.choice) {
+    await serialMarkers.emit("sos_round_end", markerContext);
+    assertCurrentSession(epoch);
+  }
   await apiJSON(`${base}/ack`, { method: "POST", body: JSON.stringify({ presentation: "audio" }) });
   assertCurrentSession(epoch);
   pendingInteraction = null;
@@ -2925,6 +2959,7 @@ async function sendInteraction(kind, value) {
       endpoint: kind === "choice"
         ? (human ? "/api/human-split-steal" : "/api/split-steal")
         : (human ? "/api/human-message" : "/api/ask"),
+      markerContext: { session: conversationSessionId, round: gameRound, mode },
       body: { session_id: conversationSessionId, request_id: crypto.randomUUID(), avatar: currentAvatarKey,
         ...(kind === "choice" ? { choice: value, expected_round: gameRound } : { text: value }) },
     };

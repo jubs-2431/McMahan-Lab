@@ -428,6 +428,11 @@ def confederate_page():
     return redirect("/?mode=confederate", code=302)
 
 
+@app.route("/serial-markers.mjs")
+def serial_markers_js():
+    return send_from_directory(ROOT, "serial-markers.mjs", mimetype="application/javascript", max_age=0)
+
+
 @app.route("/main.js")
 def main_js():
     return send_from_directory(ROOT, "main.js", mimetype="application/javascript")
